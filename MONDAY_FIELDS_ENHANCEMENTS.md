@@ -163,6 +163,51 @@ Branch has been pushed to: `cursor/monday-fields-and-tags-enhancements`
 - Tag support works with Monday.com's native tag column type
 - Link to Bug Case field is automatically supported as a text/link field type
 
+## Update: Column Type Detection Fix
+
+**Commit**: `f6ff1b3 - Fix tags and Link to Bug Case column detection and rendering`
+
+### Issues Addressed:
+
+The initial implementation had column type detection issues that prevented Tags and Link to Bug Case from appearing in the UI. This update fixes:
+
+1. **Tags Column Detection**:
+   - Now supports both `tag` and `tags` column types
+   - Added comprehensive debug logging to see actual Monday column types
+   - Improved tag parsing from column settings (handles multiple formats)
+   - Tags can be in `settings.tags`, `settings.labels`, as array or object
+
+2. **Link to Bug Case Detection**:
+   - Added explicit handling for `board_relation` column type
+   - Filters specifically for "Link to Bug Case" columns
+   - Treats it as a link input with URL format
+
+3. **Debug Logging**:
+   - Logs all columns with their types and IDs on load
+   - Logs each step of column value collection
+   - Helps identify column type mismatches quickly
+
+4. **Value Formatting**:
+   - Tags: `{ tag_ids: [123, 456] }` for existing tags
+   - Links: `{ url: "...", text: "..." }` for link columns
+   - Null handling: Empty values are not sent to Monday
+
+### Testing Notes:
+
+When you load the bug creation form, check the browser console for:
+```
+=== MONDAY COLUMNS DEBUG ===
+Column: "Tags" | Type: "tags" | ID: tags_xyz
+  Settings: { tags: [...] }
+Column: "Link to Bug Case" | Type: "board_relation" | ID: link_123
+  Settings: { ... }
+=== END DEBUG ===
+```
+
+This will help identify the exact column types Monday returns for your board.
+
 ---
 
-**Commit**: `6433a4b - Implement Monday fields and tags enhancements`
+**Commits**: 
+- `6433a4b - Implement Monday fields and tags enhancements`
+- `f6ff1b3 - Fix tags and Link to Bug Case column detection and rendering`
