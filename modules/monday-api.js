@@ -329,18 +329,18 @@ export class MondayAPI {
 
   async updateColumnValues(boardId, itemId, columnValues) {
     console.log('');
-    console.log('🔧 ========== Monday API Update ==========');
-    console.log('🔧 Board ID:', boardId);
-    console.log('🔧 Item ID:', itemId);
-    console.log('🔧 Column values object:');
-    console.log(JSON.stringify(columnValues, null, 2));
-    console.log('🔧 ========================================');
-    console.log('');
+    console.log('   ═══════════════════════════════════════');
+    console.log('   MONDAY API: change_multiple_column_values');
+    console.log('   ═══════════════════════════════════════');
+    console.log('   Board ID:', boardId);
+    console.log('   Item ID:', itemId);
+    console.log('   Column values:', JSON.stringify(columnValues, null, 2));
     
-    // Convert columnValues object to JSON string format expected by Monday
+    // Convert to JSON string (Monday format)
     const columnValuesJson = JSON.stringify(columnValues);
-    console.log('🔧 Stringified for Monday:', columnValuesJson);
+    console.log('   Stringified:', columnValuesJson);
     
+    // Build mutation
     const mutation = `
       mutation {
         change_multiple_column_values(
@@ -355,18 +355,18 @@ export class MondayAPI {
     `;
     
     console.log('');
-    console.log('🔧 ========== GraphQL Mutation ==========');
-    console.log(mutation);
-    console.log('🔧 ========================================');
+    console.log('   GraphQL Mutation:');
+    console.log('   ' + mutation.trim().split('\n').join('\n   '));
     console.log('');
 
-    console.log('🔧 Sending to Monday API...');
+    // Send request
+    console.log('   📤 Sending to Monday...');
     const data = await this.query(mutation);
     
     console.log('');
-    console.log('🔧 ========== Monday Response ==========');
-    console.log('🔧 Response data:', JSON.stringify(data, null, 2));
-    console.log('🔧 ========================================');
+    console.log('   📥 Monday Response:');
+    console.log('   ' + JSON.stringify(data, null, 2).split('\n').join('\n   '));
+    console.log('   ═══════════════════════════════════════');
     console.log('');
 
     return data.change_multiple_column_values;

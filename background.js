@@ -137,29 +137,35 @@ async function handleCreateBug(message, sendResponse) {
     console.log('Fetching board columns for updates...');
     const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
     
-    // DEBUG STEP 1: Log Tags column metadata
+    // STEP 1: Confirm Tags column metadata
     console.log('');
-    console.log('🔍 ========== TAGS COLUMN VERIFICATION ==========');
+    console.log('========================================');
+    console.log('STEP 1: TAGS COLUMN METADATA');
+    console.log('========================================');
+    
     const tagsColumnMeta = columns.find(col => col.type === 'tags' || col.type === 'tag');
+    
     if (tagsColumnMeta) {
-      console.log('✅ Found Tags column:');
-      console.log('   ID:', tagsColumnMeta.id);
-      console.log('   Title:', tagsColumnMeta.title);
-      console.log('   Type:', tagsColumnMeta.type);
-      console.log('   Settings:', JSON.stringify(tagsColumnMeta.settings, null, 2));
+      console.log('✅ Tags column found:');
+      console.log('   Column ID:', tagsColumnMeta.id);
+      console.log('   Column Title:', tagsColumnMeta.title);
+      console.log('   Column Type:', tagsColumnMeta.type);
       
-      // Check if this column has existing tags
+      // Log existing tags with their IDs (for testing)
       if (tagsColumnMeta.settings && tagsColumnMeta.settings.tags) {
         console.log('   Existing tags in board:');
-        tagsColumnMeta.settings.tags.forEach((tag, idx) => {
-          console.log(`     [${idx}] ID: ${tag.id}, Name: "${tag.name}"`);
+        tagsColumnMeta.settings.tags.forEach(tag => {
+          console.log(`     • Tag ID: ${tag.id} | Name: "${tag.name}" | Type: ${typeof tag.id}`);
         });
+      } else {
+        console.log('   No existing tags found in settings');
       }
     } else {
-      console.warn('⚠️  No Tags column found in board!');
-      console.log('Available column types:', columns.map(c => `${c.title} (${c.type})`));
+      console.log('❌ No Tags column found in board!');
+      console.log('Available columns:', columns.map(c => `${c.title} (${c.type})`).join(', '));
     }
-    console.log('🔍 ===============================================');
+    
+    console.log('========================================');
     console.log('');
     
     // Find columns that need forced defaults
@@ -330,111 +336,125 @@ async function handleCreateBug(message, sendResponse) {
       }
     }
     
-    // STEP 3: Handle Tags column separately (isolated update)
+    // STEP 2 & 3: Minimal Tags Update (Isolated)
     console.log('');
-    console.log('=== STEP 3: Applying Tags (Isolated Update) ===');
+    console.log('========================================');
+    console.log('STEP 2: MINIMAL TAGS UPDATE');
+    console.log('========================================');
     
-    // Find tags column for update (reuse tagsColumnMeta from above if available)
+    // Find tags column
     const tagsColumnForUpdate = columns.find(col => col.type === 'tags' || col.type === 'tag');
     const tagsColumnValue = columnValues ? columnValues[tagsColumnForUpdate?.id] : null;
     
-    if (tagsColumnForUpdate && tagsColumnValue) {
-      console.log('🏷️  Tags column found and has value to apply');
-      console.log('🏷️  Column ID:', tagsColumnForUpdate.id);
-      console.log('🏷️  Column Title:', tagsColumnForUpdate.title);
-      console.log('🏷️  Raw value from frontend:', tagsColumnValue);
+    if (!tagsColumnForUpdate) {
+      console.log('⏭️  No tags column found - skipping');
+      console.log('========================================');
+    } else if (!tagsColumnValue) {
+      console.log('⏭️  No tags value from user - skipping');
+      console.log('========================================');
+    } else {
+      console.log('✅ Tags column exists and user provided tags');
+      console.log('   Column ID:', tagsColumnForUpdate.id);
+      console.log('   Raw value from frontend:', JSON.stringify(tagsColumnValue));
       
       try {
-        // Extract tag IDs from the payload
-        if (tagsColumnValue.tag_ids && Array.isArray(tagsColumnValue.tag_ids)) {
-          const tagIds = tagsColumnValue.tag_ids;
-          console.log('🏷️  Tag IDs from frontend:', tagIds);
+        // Extract tag IDs from frontend
+        if (!tagsColumnValue.tag_ids || !Array.isArray(tagsColumnValue.tag_ids)) {
+          console.log('❌ Invalid tags structure from frontend');
+          console.log('========================================');
+        } else {
+          const tagIdsFromFrontend = tagsColumnValue.tag_ids;
+          console.log('   Tag IDs from frontend:', tagIdsFromFrontend);
           
-          // Separate numeric IDs from new tag names
-          const numericTagIds = [];
+          // Separate existing tag IDs from new tag names
+          const existingTagIds = [];
           const newTagNames = [];
           
-          for (const tagId of tagIds) {
-            if (typeof tagId === 'number' || !isNaN(parseInt(tagId))) {
-              numericTagIds.push(parseInt(tagId));
+          for (const item of tagIdsFromFrontend) {
+            const itemStr = String(item);
+            if (/^\d+$/.test(itemStr)) {
+              // It's numeric - existing tag ID
+              existingTagIds.push(parseInt(itemStr));
             } else {
-              newTagNames.push(tagId.toString());
+              // It's a string - new tag name
+              newTagNames.push(itemStr);
             }
           }
           
-          console.log('🏷️  Existing tag IDs (numeric):', numericTagIds);
-          console.log('🏷️  New tag names to create:', newTagNames);
+          console.log('   Existing tag IDs:', existingTagIds);
+          console.log('   New tag names:', newTagNames);
           
-          // Create new tags and get their IDs
-          const allTagIds = [...numericTagIds];
+          // STEP 3: Create new tags if needed
+          const allTagIds = [...existingTagIds];
           
-          for (const tagName of newTagNames) {
-            try {
-              console.log(`🏷️  Creating/getting tag: "${tagName}"`);
-              const newTagId = await mondayAPI.createOrGetTag(settings.selectedBoardId, tagName);
-              console.log(`   ✅ Tag "${tagName}" ID: ${newTagId} (type: ${typeof newTagId})`);
-              allTagIds.push(parseInt(newTagId));
-            } catch (tagError) {
-              console.error(`   ❌ Failed to create tag "${tagName}":`, tagError.message);
+          if (newTagNames.length > 0) {
+            console.log('');
+            console.log('   Creating new tags...');
+            for (const tagName of newTagNames) {
+              try {
+                console.log(`   • Creating tag: "${tagName}"`);
+                const newTagId = await mondayAPI.createOrGetTag(settings.selectedBoardId, tagName);
+                const numericId = parseInt(newTagId);
+                allTagIds.push(numericId);
+                console.log(`     ✅ Created with ID: ${numericId}`);
+              } catch (createError) {
+                console.error(`     ❌ Failed: ${createError.message}`);
+              }
             }
           }
           
-          // Now do ISOLATED tags-only update
-          if (allTagIds.length > 0) {
+          // Now update with final tag IDs
+          if (allTagIds.length === 0) {
             console.log('');
-            console.log('🏷️  ========== ISOLATED TAGS UPDATE ==========');
-            console.log('🏷️  Final tag IDs (all numeric):', allTagIds);
-            console.log('🏷️  Column ID:', tagsColumnForUpdate.id);
-            console.log('🏷️  Item ID:', item.id);
-            console.log('🏷️  Board ID:', settings.selectedBoardId);
-            
-            // Build the tags payload - try numeric array format
-            const tagsPayload = {
-              tag_ids: allTagIds  // Array of integers
-            };
-            
-            console.log('🏷️  Tags payload:', JSON.stringify(tagsPayload));
+            console.log('⚠️  No valid tag IDs to apply');
+            console.log('========================================');
+          } else {
             console.log('');
-            console.log('🏷️  Sending ISOLATED update (tags only, no other columns)');
+            console.log('   Final tag IDs to apply:', allTagIds);
+            console.log('');
+            console.log('   Sending tags-only update...');
+            console.log('   Board ID:', settings.selectedBoardId);
+            console.log('   Item ID:', item.id);
+            console.log('   Column ID:', tagsColumnForUpdate.id);
             
+            // Build minimal payload
+            const tagsPayload = { tag_ids: allTagIds };
+            console.log('   Tags payload:', JSON.stringify(tagsPayload));
+            
+            // Send isolated update
             try {
-              const tagsUpdateResult = await mondayAPI.updateColumnValues(
+              console.log('');
+              console.log('   📤 SENDING TO MONDAY...');
+              
+              const updateResult = await mondayAPI.updateColumnValues(
                 settings.selectedBoardId,
                 item.id,
                 { [tagsColumnForUpdate.id]: tagsPayload }
               );
               
               console.log('');
-              console.log('🏷️  ========== TAGS UPDATE SUCCESS ==========');
-              console.log('🏷️  Monday response:', JSON.stringify(tagsUpdateResult, null, 2));
-              console.log('🏷️  ==========================================');
+              console.log('   ✅ TAGS UPDATE SUCCESS');
+              console.log('   Response:', JSON.stringify(updateResult, null, 2));
               console.log('');
-              console.log('✅ Tags applied successfully to item');
+              console.log('✅ Tags applied to item');
+              console.log('========================================');
               
-            } catch (tagsError) {
+            } catch (updateError) {
               console.log('');
-              console.log('🏷️  ========== TAGS UPDATE FAILED ==========');
-              console.error('🏷️  Error:', tagsError.message);
-              console.error('🏷️  Full error:', tagsError);
-              console.log('🏷️  =========================================');
+              console.log('   ❌ TAGS UPDATE FAILED');
+              console.log('   Error:', updateError.message);
+              if (updateError.response) {
+                console.log('   Response:', updateError.response);
+              }
               console.log('');
-              console.warn('⚠️  Tags update failed but bug was still created');
+              console.log('⚠️  Tags failed but bug was created');
+              console.log('========================================');
             }
-          } else {
-            console.log('🏷️  No valid tag IDs to apply');
           }
-        } else {
-          console.warn('🏷️  Invalid tags payload structure:', tagsColumnValue);
         }
-        
       } catch (error) {
-        console.error('🏷️  Error processing tags:', error);
-      }
-    } else {
-      if (!tagsColumnForUpdate) {
-        console.log('🏷️  No tags column in board');
-      } else if (!tagsColumnValue) {
-        console.log('🏷️  No tags value provided by user');
+        console.error('❌ Error in tags processing:', error);
+        console.log('========================================');
       }
     }
     
