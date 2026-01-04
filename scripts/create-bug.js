@@ -716,9 +716,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   function createTagInput(column) {
     console.log('Creating tag input for column:', column.title, column.settings);
     
+    // Check if this is fallback mode (no predefined tags)
+    const hasPredefinedTags = !!(column.settings?.tags && Array.isArray(column.settings.tags) && column.settings.tags.length > 0);
+    
     const container = document.createElement('div');
     container.className = 'tag-input-container';
     container.dataset.columnId = column.id;
+    
+    // Add fallback mode indicator
+    if (!hasPredefinedTags) {
+      const fallbackNote = document.createElement('div');
+      fallbackNote.className = 'tag-fallback-note';
+      fallbackNote.innerHTML = '⚠️ <strong>Saved as text</strong> (API limitation) - Tags will be stored in "Tags (manual)" column';
+      container.appendChild(fallbackNote);
+    }
     
     // Selected tags display area
     const selectedTagsDiv = document.createElement('div');

@@ -137,33 +137,52 @@ async function handleCreateBug(message, sendResponse) {
     console.log('Fetching board columns for updates...');
     const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
     
-    // STEP 1: Confirm Tags column metadata
-    // NOTE: Variable named 'tagsColumnMeta' to avoid conflicts
+    // STEP 1: Detect Tags Support
     console.log('');
     console.log('========================================');
-    console.log('STEP 1: TAGS COLUMN METADATA');
+    console.log('STEP 1: TAGS COLUMN DETECTION');
     console.log('========================================');
     
     const tagsColumnMeta = columns.find(col => col.type === 'tags' || col.type === 'tag');
+    const hasPredefinedTags = !!(tagsColumnMeta?.settings?.tags && 
+                                  Array.isArray(tagsColumnMeta.settings.tags) && 
+                                  tagsColumnMeta.settings.tags.length > 0);
     
     if (tagsColumnMeta) {
       console.log('✅ Tags column found:');
       console.log('   Column ID:', tagsColumnMeta.id);
       console.log('   Column Title:', tagsColumnMeta.title);
       console.log('   Column Type:', tagsColumnMeta.type);
+      console.log('   Has Predefined Tags:', hasPredefinedTags);
       
-      // Log existing tags with their IDs (for testing)
-      if (tagsColumnMeta.settings && tagsColumnMeta.settings.tags) {
-        console.log('   Existing tags in board:');
+      if (hasPredefinedTags) {
+        console.log('   ✅ API-Compatible Tags (predefined tags exist)');
+        console.log('   Predefined tags in board:');
         tagsColumnMeta.settings.tags.forEach(tag => {
-          console.log(`     • Tag ID: ${tag.id} | Name: "${tag.name}" | Type: ${typeof tag.id}`);
+          console.log(`     • ID: ${tag.id} | Name: "${tag.name}"`);
         });
       } else {
-        console.log('   No existing tags found in settings');
+        console.log('   ⚠️  Free-Text Tags (no predefined tags)');
+        console.log('   → Monday API does not support updating free-text tags');
+        console.log('   → Will use fallback: "Tags (manual)" text column');
       }
     } else {
-      console.log('❌ No Tags column found in board!');
-      console.log('Available columns:', columns.map(c => `${c.title} (${c.type})`).join(', '));
+      console.log('❌ No Tags column found in board');
+    }
+    
+    // Check for fallback text column
+    const fallbackColumn = columns.find(col => 
+      col.type === 'text' && 
+      (col.title === 'Tags (manual)' || col.title === 'Tags Manual')
+    );
+    
+    if (!hasPredefinedTags) {
+      if (fallbackColumn) {
+        console.log('   ✅ Fallback column found: "' + fallbackColumn.title + '" (ID: ' + fallbackColumn.id + ')');
+      } else {
+        console.log('   ⚠️  Fallback column "Tags (manual)" not found');
+        console.log('   → Please create a TEXT column named "Tags (manual)" for tag storage');
+      }
     }
     
     console.log('========================================');
@@ -337,127 +356,127 @@ async function handleCreateBug(message, sendResponse) {
       }
     }
     
-    // STEP 2 & 3: Minimal Tags Update (Isolated)
-    // NOTE: Variable named 'tagsColumnForUpdate' to avoid conflicts with tagsColumnMeta above
+    // STEP 2: Tags Update (with fallback)
     console.log('');
     console.log('========================================');
-    console.log('STEP 2: MINIMAL TAGS UPDATE');
+    console.log('STEP 2: TAGS UPDATE');
     console.log('========================================');
     
-    // Find tags column for update
     const tagsColumnForUpdate = columns.find(col => col.type === 'tags' || col.type === 'tag');
     const tagsColumnValue = columnValues ? columnValues[tagsColumnForUpdate?.id] : null;
     
-    if (!tagsColumnForUpdate) {
-      console.log('⏭️  No tags column found - skipping');
-      console.log('========================================');
-    } else if (!tagsColumnValue) {
-      console.log('⏭️  No tags value from user - skipping');
+    if (!tagsColumnValue || !tagsColumnValue.tag_ids || !Array.isArray(tagsColumnValue.tag_ids) || tagsColumnValue.tag_ids.length === 0) {
+      console.log('⏭️  No tags provided by user - skipping');
       console.log('========================================');
     } else {
-      console.log('✅ Tags column exists and user provided tags');
-      console.log('   Column ID:', tagsColumnForUpdate.id);
-      console.log('   Raw value from frontend:', JSON.stringify(tagsColumnValue));
+      const tagIdsOrNames = tagsColumnValue.tag_ids;
+      console.log('✅ User provided tags:', tagIdsOrNames);
       
-      try {
-        // Extract tag IDs from frontend
-        if (!tagsColumnValue.tag_ids || !Array.isArray(tagsColumnValue.tag_ids)) {
-          console.log('❌ Invalid tags structure from frontend');
-          console.log('========================================');
-        } else {
-          const tagIdsFromFrontend = tagsColumnValue.tag_ids;
-          console.log('   Tag IDs from frontend:', tagIdsFromFrontend);
+      // Determine mode: API-compatible or fallback
+      if (hasPredefinedTags) {
+        // MODE 1: API-Compatible Tags (predefined tags exist)
+        console.log('');
+        console.log('📌 MODE: API-Compatible Tags');
+        console.log('   Using tag_ids to update Monday tags column');
+        
+        try {
+          // Map tag names to IDs
+          const tagIds = [];
+          const unmatchedTags = [];
           
-          // Separate existing tag IDs from new tag names
-          const existingTagIds = [];
-          const newTagNames = [];
-          
-          for (const item of tagIdsFromFrontend) {
+          for (const item of tagIdsOrNames) {
             const itemStr = String(item);
+            
+            // Check if it's already a numeric ID
             if (/^\d+$/.test(itemStr)) {
-              // It's numeric - existing tag ID
-              existingTagIds.push(parseInt(itemStr));
+              tagIds.push(parseInt(itemStr));
+              console.log(`   ✓ Tag ID: ${itemStr}`);
             } else {
-              // It's a string - new tag name
-              newTagNames.push(itemStr);
-            }
-          }
-          
-          console.log('   Existing tag IDs:', existingTagIds);
-          console.log('   New tag names:', newTagNames);
-          
-          // STEP 3: Create new tags if needed
-          const allTagIds = [...existingTagIds];
-          
-          if (newTagNames.length > 0) {
-            console.log('');
-            console.log('   Creating new tags...');
-            for (const tagName of newTagNames) {
-              try {
-                console.log(`   • Creating tag: "${tagName}"`);
-                const newTagId = await mondayAPI.createOrGetTag(settings.selectedBoardId, tagName);
-                const numericId = parseInt(newTagId);
-                allTagIds.push(numericId);
-                console.log(`     ✅ Created with ID: ${numericId}`);
-              } catch (createError) {
-                console.error(`     ❌ Failed: ${createError.message}`);
-              }
-            }
-          }
-          
-          // Now update with final tag IDs
-          if (allTagIds.length === 0) {
-            console.log('');
-            console.log('⚠️  No valid tag IDs to apply');
-            console.log('========================================');
-          } else {
-            console.log('');
-            console.log('   Final tag IDs to apply:', allTagIds);
-            console.log('');
-            console.log('   Sending tags-only update...');
-            console.log('   Board ID:', settings.selectedBoardId);
-            console.log('   Item ID:', item.id);
-            console.log('   Column ID:', tagsColumnForUpdate.id);
-            
-            // Build minimal payload
-            const tagsPayload = { tag_ids: allTagIds };
-            console.log('   Tags payload:', JSON.stringify(tagsPayload));
-            
-            // Send isolated update
-            try {
-              console.log('');
-              console.log('   📤 SENDING TO MONDAY...');
-              
-              const updateResult = await mondayAPI.updateColumnValues(
-                settings.selectedBoardId,
-                item.id,
-                { [tagsColumnForUpdate.id]: tagsPayload }
+              // Try to find by name in predefined tags
+              const matchedTag = tagsColumnMeta.settings.tags.find(t => 
+                t.name.toLowerCase() === itemStr.toLowerCase()
               );
               
-              console.log('');
-              console.log('   ✅ TAGS UPDATE SUCCESS');
-              console.log('   Response:', JSON.stringify(updateResult, null, 2));
-              console.log('');
-              console.log('✅ Tags applied to item');
-              console.log('========================================');
-              
-            } catch (updateError) {
-              console.log('');
-              console.log('   ❌ TAGS UPDATE FAILED');
-              console.log('   Error:', updateError.message);
-              if (updateError.response) {
-                console.log('   Response:', updateError.response);
+              if (matchedTag) {
+                tagIds.push(parseInt(matchedTag.id));
+                console.log(`   ✓ Mapped "${itemStr}" → ID: ${matchedTag.id}`);
+              } else {
+                unmatchedTags.push(itemStr);
+                console.log(`   ⚠️  "${itemStr}" not found in predefined tags`);
               }
-              console.log('');
-              console.log('⚠️  Tags failed but bug was created');
-              console.log('========================================');
             }
           }
+          
+          if (tagIds.length > 0) {
+            const tagsPayload = { tag_ids: tagIds };
+            console.log('');
+            console.log('   Final payload:', JSON.stringify(tagsPayload));
+            console.log('   Updating column:', tagsColumnMeta.id);
+            
+            const updateResult = await mondayAPI.updateColumnValues(
+              settings.selectedBoardId,
+              item.id,
+              { [tagsColumnMeta.id]: tagsPayload }
+            );
+            
+            console.log('   ✅ Tags updated successfully');
+            console.log('   Applied tags:', tagIds.join(', '));
+            
+            if (unmatchedTags.length > 0) {
+              console.log('   ⚠️  Unmatched tags:', unmatchedTags.join(', '));
+            }
+          } else {
+            console.log('   ⚠️  No valid tag IDs to apply');
+          }
+          
+        } catch (error) {
+          console.error('   ❌ Failed to update tags:', error.message);
         }
-      } catch (error) {
-        console.error('❌ Error in tags processing:', error);
-        console.log('========================================');
+        
+      } else {
+        // MODE 2: Fallback (free-text tags - not API compatible)
+        console.log('');
+        console.log('📝 MODE: Fallback (Free-Text Tags)');
+        console.log('   Monday API does not support free-text tags');
+        console.log('   Saving to "Tags (manual)" text column instead');
+        
+        // Find or suggest fallback column
+        const fallbackTextColumn = columns.find(col => 
+          col.type === 'text' && 
+          (col.title === 'Tags (manual)' || col.title === 'Tags Manual')
+        );
+        
+        if (!fallbackTextColumn) {
+          console.log('');
+          console.log('   ❌ Fallback column "Tags (manual)" not found!');
+          console.log('   ℹ️  To enable tag storage, create a TEXT column named "Tags (manual)"');
+          console.log('   User tags will not be saved until this column exists.');
+        } else {
+          try {
+            // Convert tags to text format: #tag1 #tag2 #tag3
+            const tagNames = tagIdsOrNames.map(tag => String(tag));
+            const tagsText = tagNames.map(name => `#${name}`).join(' ');
+            
+            console.log('   Tags to save:', tagNames.join(', '));
+            console.log('   Formatted text:', tagsText);
+            console.log('   Target column:', fallbackTextColumn.title, '(ID:', fallbackTextColumn.id + ')');
+            
+            const updateResult = await mondayAPI.updateColumnValues(
+              settings.selectedBoardId,
+              item.id,
+              { [fallbackTextColumn.id]: tagsText }
+            );
+            
+            console.log('   ✅ Tags saved to text column successfully');
+            console.log('   Note: These are stored as text, not Monday tags');
+            
+          } catch (error) {
+            console.error('   ❌ Failed to save tags to text column:', error.message);
+          }
+        }
       }
+      
+      console.log('========================================');
     }
     
     // Clean up stored attachments
