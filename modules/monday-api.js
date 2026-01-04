@@ -297,10 +297,12 @@ export class MondayAPI {
   }
 
   async updateColumnValues(boardId, itemId, columnValues) {
-    console.log('Updating column values for item:', itemId, columnValues);
+    console.log('Updating column values for item:', itemId);
+    console.log('Column values:', JSON.stringify(columnValues, null, 2));
     
     // Convert columnValues object to JSON string format expected by Monday
     const columnValuesJson = JSON.stringify(columnValues);
+    console.log('Stringified column values:', columnValuesJson);
     
     const mutation = `
       mutation {
@@ -314,6 +316,8 @@ export class MondayAPI {
         }
       }
     `;
+    
+    console.log('GraphQL mutation:', mutation);
 
     const data = await this.query(mutation);
 

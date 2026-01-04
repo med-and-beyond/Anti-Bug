@@ -70,6 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('stepsToReproduce').value = saved.stepsToReproduce || '';
     document.getElementById('actualResult').value = saved.actualResult || '';
     document.getElementById('expectedResult').value = saved.expectedResult || '';
+    document.getElementById('linkToBugCase').value = saved.linkToBugCase || '';
     
     // Restore attachments
     if (saved.attachedFiles) {
@@ -1035,22 +1036,46 @@ document.addEventListener('DOMContentLoaded', async () => {
       case 'tag':
       case 'tags':
         // Tags support both existing tag IDs and new tag names
-        const tagIds = Array.from(value.tagIds || []).map(id => {
-          // Handle both numeric IDs and string IDs
-          return isNaN(parseInt(id)) ? id : parseInt(id);
-        });
+        const tagIds = Array.from(value.tagIds || []);
         const allTagNames = Array.from(value.tagNames || []);
         
-        console.log('Formatting tags:', { tagIds, allTagNames });
+        console.log('Formatting tags - IDs:', tagIds, 'Names:', allTagNames);
         
-        // For Monday.com tags column, we send tag IDs
-        // For new tags, we'll include them by name
-        if (tagIds.length > 0 || allTagNames.length > 0) {
-          // Build tags array - Monday expects { tag_ids: [1, 2, 3] }
-          // or just the tag IDs as integers
-          return { tag_ids: tagIds.length > 0 ? tagIds : allTagNames };
+        // Monday.com tags column expects tag IDs as integers
+        // For new tags, we need to send them by name
+        if (tagIds.length === 0 && allTagNames.length === 0) {
+          return null;
         }
-        return null;
+        
+        // Build the payload - Monday expects an object with tag_ids array
+        // and optionally tag names for new tags
+        const tagsPayload = {};
+        
+        // Add existing tag IDs (must be integers)
+        if (tagIds.length > 0) {
+          tagsPayload.tag_ids = tagIds.map(id => parseInt(id));
+        }
+        
+        // For new tags (names without IDs), we might need to send them as additional_tags or post_tags
+        // Let's try the format Monday uses for creating new tags
+        const newTags = allTagNames.filter(name => {
+          // Filter out names that correspond to existing IDs
+          return !tagIds.includes(name);
+        });
+        
+        if (newTags.length > 0) {
+          // Try sending new tags as plain tag IDs (using the name as ID for now)
+          // Monday might auto-create them
+          console.log('New tags to create:', newTags);
+          if (!tagsPayload.tag_ids) {
+            tagsPayload.tag_ids = [];
+          }
+          // Add new tag names to the array
+          tagsPayload.tag_ids.push(...newTags);
+        }
+        
+        console.log('Final tags payload:', tagsPayload);
+        return tagsPayload;
       
       case 'board_relation':
         // For Link to Bug Case - send as item IDs or URL
@@ -1120,6 +1145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           stepsToReproduce: document.getElementById('stepsToReproduce').value,
           actualResult: document.getElementById('actualResult').value,
           expectedResult: document.getElementById('expectedResult').value,
+          linkToBugCase: document.getElementById('linkToBugCase').value,
           boardId: boardSelect.value,
           groupId: groupSelect.value,
           attachedFiles: attachedFiles
@@ -1357,7 +1383,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         description: description,
         stepsToReproduce: stepsToReproduce,
         actualResult: document.getElementById('actualResult').value,
-        expectedResult: document.getElementById('expectedResult').value
+        expectedResult: document.getElementById('expectedResult').value,
+        linkToBugCase: document.getElementById('linkToBugCase').value
       };
 
       console.log('Bug data:', bugData);
