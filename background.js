@@ -137,6 +137,31 @@ async function handleCreateBug(message, sendResponse) {
     console.log('Fetching board columns for updates...');
     const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
     
+    // DEBUG STEP 1: Log Tags column metadata
+    console.log('');
+    console.log('🔍 ========== TAGS COLUMN VERIFICATION ==========');
+    const tagsColumn = columns.find(col => col.type === 'tags' || col.type === 'tag');
+    if (tagsColumn) {
+      console.log('✅ Found Tags column:');
+      console.log('   ID:', tagsColumn.id);
+      console.log('   Title:', tagsColumn.title);
+      console.log('   Type:', tagsColumn.type);
+      console.log('   Settings:', JSON.stringify(tagsColumn.settings, null, 2));
+      
+      // Check if this column has existing tags
+      if (tagsColumn.settings && tagsColumn.settings.tags) {
+        console.log('   Existing tags in board:');
+        tagsColumn.settings.tags.forEach((tag, idx) => {
+          console.log(`     [${idx}] ID: ${tag.id}, Name: "${tag.name}"`);
+        });
+      }
+    } else {
+      console.warn('⚠️  No Tags column found in board!');
+      console.log('Available column types:', columns.map(c => `${c.title} (${c.type})`));
+    }
+    console.log('🔍 ===============================================');
+    console.log('');
+    
     // Find columns that need forced defaults
     const defaultColumns = {};
     columns.forEach(col => {
@@ -272,65 +297,10 @@ async function handleCreateBug(message, sendResponse) {
               failedUpdates.push({ columnId, error: 'Label not found or deactivated' });
             }
           }
-          // Special handling for tags columns
+          // Special handling for tags columns - DO NOT PROCESS IN LOOP
           else if (columnMeta && (columnMeta.type === 'tag' || columnMeta.type === 'tags')) {
-            console.log(`  📌 Tags column detected, payload:`, columnValue);
-            console.log(`  📌 Column ID: ${columnId}`);
-            console.log(`  📌 Column metadata:`, columnMeta);
-            
-            // ========================================
-            // SANITY TEST: Send simple plain string
-            // ========================================
-            console.log('');
-            console.log('🧪 ========== SANITY TEST MODE ==========');
-            console.log('🧪 Sending PLAIN STRING to verify pipeline');
-            console.log('🧪 This is NOT the final tags format');
-            console.log('🧪 =======================================');
-            console.log('');
-            
-            // Send a simple plain string value
-            const testPayload = "test-tag-rrr";
-            
-            console.log(`🧪 Test payload (plain string): "${testPayload}"`);
-            console.log(`🧪 Column ID: ${columnId}`);
-            console.log(`🧪 Item ID: ${item.id}`);
-            console.log(`🧪 Board ID: ${settings.selectedBoardId}`);
-            console.log('');
-            console.log('🧪 Sending update with:');
-            console.log('🧪 {');
-            console.log(`🧪   "${columnId}": "${testPayload}"`);
-            console.log('🧪 }');
-            console.log('');
-            
-            try {
-              const updateResult = await mondayAPI.updateColumnValues(
-                settings.selectedBoardId,
-                item.id,
-                { [columnId]: testPayload }  // Plain string!
-              );
-              
-              console.log('');
-              console.log('🧪 ========== UPDATE RESULT ==========');
-              console.log('🧪 Success! Update returned:', updateResult);
-              console.log('🧪 ====================================');
-              console.log('');
-              
-              successfulUpdates.push(columnId);
-              console.log(`  ✅ ${columnId} (tags) SANITY TEST completed`);
-              
-            } catch (testError) {
-              console.log('');
-              console.log('🧪 ========== UPDATE FAILED ==========');
-              console.error('🧪 Error:', testError.message);
-              console.error('🧪 Full error:', testError);
-              console.log('🧪 ====================================');
-              console.log('');
-              
-              failedUpdates.push({ 
-                columnId, 
-                error: `SANITY TEST FAILED: ${testError.message}` 
-              });
-            }
+            console.log(`  ⏭️  Skipping tags column ${columnId} in main loop (will be processed separately)`);
+            continue;
           }
           // Skip board-relation columns for now (Link to Bug Case needs item IDs)
           else if (columnMeta && columnMeta.type === 'board_relation') {
@@ -357,6 +327,114 @@ async function handleCreateBug(message, sendResponse) {
       console.log(`✅ Updated ${successfulUpdates.length} columns successfully`);
       if (failedUpdates.length > 0) {
         console.warn(`⚠️  Failed to update ${failedUpdates.length} columns:`, failedUpdates);
+      }
+    }
+    
+    // STEP 3: Handle Tags column separately (isolated update)
+    console.log('');
+    console.log('=== STEP 3: Applying Tags (Isolated Update) ===');
+    
+    // Find tags column
+    const tagsColumn = columns.find(col => col.type === 'tags' || col.type === 'tag');
+    const tagsColumnValue = columnValues ? columnValues[tagsColumn?.id] : null;
+    
+    if (tagsColumn && tagsColumnValue) {
+      console.log('🏷️  Tags column found and has value to apply');
+      console.log('🏷️  Column ID:', tagsColumn.id);
+      console.log('🏷️  Column Title:', tagsColumn.title);
+      console.log('🏷️  Raw value from frontend:', tagsColumnValue);
+      
+      try {
+        // Extract tag IDs from the payload
+        if (tagsColumnValue.tag_ids && Array.isArray(tagsColumnValue.tag_ids)) {
+          const tagIds = tagsColumnValue.tag_ids;
+          console.log('🏷️  Tag IDs from frontend:', tagIds);
+          
+          // Separate numeric IDs from new tag names
+          const numericTagIds = [];
+          const newTagNames = [];
+          
+          for (const tagId of tagIds) {
+            if (typeof tagId === 'number' || !isNaN(parseInt(tagId))) {
+              numericTagIds.push(parseInt(tagId));
+            } else {
+              newTagNames.push(tagId.toString());
+            }
+          }
+          
+          console.log('🏷️  Existing tag IDs (numeric):', numericTagIds);
+          console.log('🏷️  New tag names to create:', newTagNames);
+          
+          // Create new tags and get their IDs
+          const allTagIds = [...numericTagIds];
+          
+          for (const tagName of newTagNames) {
+            try {
+              console.log(`🏷️  Creating/getting tag: "${tagName}"`);
+              const newTagId = await mondayAPI.createOrGetTag(settings.selectedBoardId, tagName);
+              console.log(`   ✅ Tag "${tagName}" ID: ${newTagId} (type: ${typeof newTagId})`);
+              allTagIds.push(parseInt(newTagId));
+            } catch (tagError) {
+              console.error(`   ❌ Failed to create tag "${tagName}":`, tagError.message);
+            }
+          }
+          
+          // Now do ISOLATED tags-only update
+          if (allTagIds.length > 0) {
+            console.log('');
+            console.log('🏷️  ========== ISOLATED TAGS UPDATE ==========');
+            console.log('🏷️  Final tag IDs (all numeric):', allTagIds);
+            console.log('🏷️  Column ID:', tagsColumn.id);
+            console.log('🏷️  Item ID:', item.id);
+            console.log('🏷️  Board ID:', settings.selectedBoardId);
+            
+            // Build the tags payload - try numeric array format
+            const tagsPayload = {
+              tag_ids: allTagIds  // Array of integers
+            };
+            
+            console.log('🏷️  Tags payload:', JSON.stringify(tagsPayload));
+            console.log('');
+            console.log('🏷️  Sending ISOLATED update (tags only, no other columns)');
+            
+            try {
+              const tagsUpdateResult = await mondayAPI.updateColumnValues(
+                settings.selectedBoardId,
+                item.id,
+                { [tagsColumn.id]: tagsPayload }
+              );
+              
+              console.log('');
+              console.log('🏷️  ========== TAGS UPDATE SUCCESS ==========');
+              console.log('🏷️  Monday response:', JSON.stringify(tagsUpdateResult, null, 2));
+              console.log('🏷️  ==========================================');
+              console.log('');
+              console.log('✅ Tags applied successfully to item');
+              
+            } catch (tagsError) {
+              console.log('');
+              console.log('🏷️  ========== TAGS UPDATE FAILED ==========');
+              console.error('🏷️  Error:', tagsError.message);
+              console.error('🏷️  Full error:', tagsError);
+              console.log('🏷️  =========================================');
+              console.log('');
+              console.warn('⚠️  Tags update failed but bug was still created');
+            }
+          } else {
+            console.log('🏷️  No valid tag IDs to apply');
+          }
+        } else {
+          console.warn('🏷️  Invalid tags payload structure:', tagsColumnValue);
+        }
+        
+      } catch (error) {
+        console.error('🏷️  Error processing tags:', error);
+      }
+    } else {
+      if (!tagsColumn) {
+        console.log('🏷️  No tags column in board');
+      } else if (!tagsColumnValue) {
+        console.log('🏷️  No tags value provided by user');
       }
     }
     
