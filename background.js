@@ -194,30 +194,45 @@ async function handleCreateBug(message, sendResponse) {
     
     // Handle Link to Bug Case from bugData (if provided)
     if (bugData.linkToBugCase && bugData.linkToBugCase.trim()) {
-      console.log('Link to Bug Case provided:', bugData.linkToBugCase);
+      console.log('🔗 Link to Bug Case provided:', bugData.linkToBugCase);
+      console.log('🔍 Looking for Link or Text column (NOT board-relation)...');
       
-      // Find a text or link column named "Link to Bug Case"
-      const linkColumn = columns.find(col => 
-        (col.title === 'Link to Bug Case' || 
-         col.title.toLowerCase().includes('link to bug') ||
-         col.title === 'Bug Case Link') &&
-        (col.type === 'text' || col.type === 'link' || col.type === 'url')
-      );
+      // Find a Link or Text column (explicitly exclude board-relation)
+      const linkColumn = columns.find(col => {
+        const titleMatches = col.title === 'Link to Bug Case' || 
+                            col.title.toLowerCase().includes('link to bug') ||
+                            col.title === 'Bug Case Link' ||
+                            col.title === 'Bug Case URL';
+        
+        const isLinkOrText = col.type === 'text' || col.type === 'link' || col.type === 'url';
+        const notBoardRelation = col.type !== 'board_relation';
+        
+        if (titleMatches) {
+          console.log(`  Found column "${col.title}" with type: ${col.type}`);
+        }
+        
+        return titleMatches && isLinkOrText && notBoardRelation;
+      });
       
       if (linkColumn) {
-        console.log(`Found Link to Bug Case column: ${linkColumn.title} (${linkColumn.type})`);
+        console.log(`✅ Using column: "${linkColumn.title}" (${linkColumn.type}) for Link to Bug Case`);
         
-        // Add to columnValues
+        // Add to columnValues with proper format
         if (linkColumn.type === 'link' || linkColumn.type === 'url') {
           columnValues[linkColumn.id] = {
             url: bugData.linkToBugCase,
             text: bugData.linkToBugCase
           };
+          console.log(`  Format: Link column {url: "...", text: "..."}`);
         } else {
+          // Text column - plain string
           columnValues[linkColumn.id] = bugData.linkToBugCase;
+          console.log(`  Format: Text column (plain string)`);
         }
       } else {
-        console.warn('No suitable column found for Link to Bug Case. Looking for text/link column with that name.');
+        console.warn('⚠️  No suitable Link or Text column found for "Link to Bug Case"');
+        console.log('Available columns:', columns.map(c => `${c.title} (${c.type})`).join(', '));
+        console.log('💡 Please create a Link or Text column named "Link to Bug Case" in your Monday board');
       }
     }
     
@@ -261,38 +276,60 @@ async function handleCreateBug(message, sendResponse) {
           else if (columnMeta && (columnMeta.type === 'tag' || columnMeta.type === 'tags')) {
             console.log(`  📌 Tags column detected, payload:`, columnValue);
             
-            // Ensure we have tag_ids in the correct format
-            let tagsToSend = columnValue;
+            // Monday expects tag IDs as STRINGS, not integers
+            // Format: { "tag_ids": ["id1", "id2", "id3"] }
             
-            // If tag_ids is present but empty or has non-numeric values, handle it
-            if (tagsToSend && tagsToSend.tag_ids) {
-              // Filter to only numeric IDs
-              const numericIds = tagsToSend.tag_ids.filter(id => !isNaN(parseInt(id))).map(id => parseInt(id));
-              const stringIds = tagsToSend.tag_ids.filter(id => isNaN(parseInt(id)));
+            if (columnValue && columnValue.tag_ids && Array.isArray(columnValue.tag_ids)) {
+              const existingTagIds = [];
+              const newTagNames = [];
               
-              console.log(`  📌 Numeric tag IDs:`, numericIds);
-              console.log(`  📌 New tag names:`, stringIds);
-              
-              // For now, only send numeric IDs
-              // New tags (strings) might need to be created separately
-              if (numericIds.length > 0) {
-                tagsToSend = { tag_ids: numericIds };
-              } else if (stringIds.length > 0) {
-                // Try to create new tags by sending them as tag_ids
-                // Monday might auto-create them or we might need a different approach
-                console.warn(`  ⚠️  New tags need to be created: ${stringIds.join(', ')}`);
-                // For now, try sending as-is and see what Monday does
-                tagsToSend = { tag_ids: stringIds };
+              // Separate existing IDs from new tag names
+              for (const tagId of columnValue.tag_ids) {
+                const idStr = tagId.toString();
+                // If it's numeric, it's an existing tag ID
+                if (!isNaN(parseInt(idStr))) {
+                  existingTagIds.push(idStr); // Store as STRING
+                } else {
+                  // It's a new tag name
+                  newTagNames.push(idStr);
+                }
               }
+              
+              console.log(`  📌 Existing tag IDs (strings):`, existingTagIds);
+              console.log(`  📌 New tag names to create:`, newTagNames);
+              
+              // Create new tags and get their IDs
+              const allTagIds = [...existingTagIds];
+              for (const tagName of newTagNames) {
+                try {
+                  console.log(`  🏷️  Creating/getting tag: "${tagName}"`);
+                  const newTagId = await mondayAPI.createOrGetTag(settings.selectedBoardId, tagName);
+                  allTagIds.push(newTagId); // Already a string
+                  console.log(`  ✅ Tag "${tagName}" created with ID: ${newTagId}`);
+                } catch (tagError) {
+                  console.error(`  ❌ Failed to create tag "${tagName}":`, tagError.message);
+                  // Continue with other tags
+                }
+              }
+              
+              // Now update the column with all tag IDs (as strings)
+              if (allTagIds.length > 0) {
+                const tagsPayload = { tag_ids: allTagIds };
+                console.log(`  📌 Final tags payload (all IDs as strings):`, tagsPayload);
+                
+                await mondayAPI.updateColumnValues(
+                  settings.selectedBoardId,
+                  item.id,
+                  { [columnId]: tagsPayload }
+                );
+                successfulUpdates.push(columnId);
+                console.log(`  ✅ ${columnId} (tags) updated with ${allTagIds.length} tag(s)`);
+              } else {
+                console.warn(`  ⚠️  No valid tags to apply`);
+              }
+            } else {
+              console.warn(`  ⚠️  Invalid tags payload format:`, columnValue);
             }
-            
-            await mondayAPI.updateColumnValues(
-              settings.selectedBoardId,
-              item.id,
-              { [columnId]: tagsToSend }
-            );
-            successfulUpdates.push(columnId);
-            console.log(`  ✅ ${columnId} (tags) updated`);
           }
           // Skip board-relation columns for now (Link to Bug Case needs item IDs)
           else if (columnMeta && columnMeta.type === 'board_relation') {

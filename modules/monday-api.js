@@ -249,6 +249,37 @@ export class MondayAPI {
     return [];
   }
 
+  async createOrGetTag(boardId, tagName) {
+    /**
+     * Create a new tag or get existing tag ID by name
+     * Returns the tag ID as a string
+     */
+    console.log(`Creating/getting tag "${tagName}" for board ${boardId}`);
+    
+    const mutation = `
+      mutation ($boardId: ID!, $tagName: String!) {
+        create_or_get_tag(board_id: $boardId, tag_name: $tagName) {
+          id
+          name
+        }
+      }
+    `;
+    
+    try {
+      const data = await this.query(mutation, {
+        boardId: parseInt(boardId),
+        tagName: tagName
+      });
+      
+      const tag = data.create_or_get_tag;
+      console.log(`✓ Tag "${tagName}" has ID: ${tag.id}`);
+      return tag.id.toString(); // Return as string
+    } catch (error) {
+      console.error(`Failed to create/get tag "${tagName}":`, error);
+      throw error;
+    }
+  }
+
   findLabelValue(columnSettings, labelText) {
     /**
      * Find the correct label value format for a status/color column
