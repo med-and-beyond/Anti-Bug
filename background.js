@@ -140,18 +140,18 @@ async function handleCreateBug(message, sendResponse) {
     // DEBUG STEP 1: Log Tags column metadata
     console.log('');
     console.log('🔍 ========== TAGS COLUMN VERIFICATION ==========');
-    const tagsColumn = columns.find(col => col.type === 'tags' || col.type === 'tag');
-    if (tagsColumn) {
+    const tagsColumnMeta = columns.find(col => col.type === 'tags' || col.type === 'tag');
+    if (tagsColumnMeta) {
       console.log('✅ Found Tags column:');
-      console.log('   ID:', tagsColumn.id);
-      console.log('   Title:', tagsColumn.title);
-      console.log('   Type:', tagsColumn.type);
-      console.log('   Settings:', JSON.stringify(tagsColumn.settings, null, 2));
+      console.log('   ID:', tagsColumnMeta.id);
+      console.log('   Title:', tagsColumnMeta.title);
+      console.log('   Type:', tagsColumnMeta.type);
+      console.log('   Settings:', JSON.stringify(tagsColumnMeta.settings, null, 2));
       
       // Check if this column has existing tags
-      if (tagsColumn.settings && tagsColumn.settings.tags) {
+      if (tagsColumnMeta.settings && tagsColumnMeta.settings.tags) {
         console.log('   Existing tags in board:');
-        tagsColumn.settings.tags.forEach((tag, idx) => {
+        tagsColumnMeta.settings.tags.forEach((tag, idx) => {
           console.log(`     [${idx}] ID: ${tag.id}, Name: "${tag.name}"`);
         });
       }
@@ -334,14 +334,14 @@ async function handleCreateBug(message, sendResponse) {
     console.log('');
     console.log('=== STEP 3: Applying Tags (Isolated Update) ===');
     
-    // Find tags column
-    const tagsColumn = columns.find(col => col.type === 'tags' || col.type === 'tag');
-    const tagsColumnValue = columnValues ? columnValues[tagsColumn?.id] : null;
+    // Find tags column for update (reuse tagsColumnMeta from above if available)
+    const tagsColumnForUpdate = columns.find(col => col.type === 'tags' || col.type === 'tag');
+    const tagsColumnValue = columnValues ? columnValues[tagsColumnForUpdate?.id] : null;
     
-    if (tagsColumn && tagsColumnValue) {
+    if (tagsColumnForUpdate && tagsColumnValue) {
       console.log('🏷️  Tags column found and has value to apply');
-      console.log('🏷️  Column ID:', tagsColumn.id);
-      console.log('🏷️  Column Title:', tagsColumn.title);
+      console.log('🏷️  Column ID:', tagsColumnForUpdate.id);
+      console.log('🏷️  Column Title:', tagsColumnForUpdate.title);
       console.log('🏷️  Raw value from frontend:', tagsColumnValue);
       
       try {
@@ -384,7 +384,7 @@ async function handleCreateBug(message, sendResponse) {
             console.log('');
             console.log('🏷️  ========== ISOLATED TAGS UPDATE ==========');
             console.log('🏷️  Final tag IDs (all numeric):', allTagIds);
-            console.log('🏷️  Column ID:', tagsColumn.id);
+            console.log('🏷️  Column ID:', tagsColumnForUpdate.id);
             console.log('🏷️  Item ID:', item.id);
             console.log('🏷️  Board ID:', settings.selectedBoardId);
             
@@ -401,7 +401,7 @@ async function handleCreateBug(message, sendResponse) {
               const tagsUpdateResult = await mondayAPI.updateColumnValues(
                 settings.selectedBoardId,
                 item.id,
-                { [tagsColumn.id]: tagsPayload }
+                { [tagsColumnForUpdate.id]: tagsPayload }
               );
               
               console.log('');
@@ -431,7 +431,7 @@ async function handleCreateBug(message, sendResponse) {
         console.error('🏷️  Error processing tags:', error);
       }
     } else {
-      if (!tagsColumn) {
+      if (!tagsColumnForUpdate) {
         console.log('🏷️  No tags column in board');
       } else if (!tagsColumnValue) {
         console.log('🏷️  No tags value provided by user');
