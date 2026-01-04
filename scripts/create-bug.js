@@ -379,17 +379,47 @@ document.addEventListener('DOMContentLoaded', async () => {
       'Bug Status'
     ];
 
+    // Debug: Log all column types to see what Monday returns
+    console.log('=== MONDAY COLUMNS DEBUG ===');
+    columns.forEach(col => {
+      console.log(`Column: "${col.title}" | Type: "${col.type}" | ID: ${col.id}`);
+      if (col.settings) {
+        console.log(`  Settings:`, col.settings);
+      }
+    });
+    console.log('=== END DEBUG ===');
+
     // Filter out system columns and excluded columns
-    const editableColumns = columns.filter(col => 
-      col.type !== 'name' && // Item name (already used for title)
-      col.type !== 'auto_number' && // Auto-generated
-      col.type !== 'creation_log' && // System field
-      col.type !== 'last_updated' && // System field
-      col.type !== 'board_relation' && // Complex type
-      col.type !== 'dependency' && // Complex type
-      col.type !== 'file' && // Files handled separately
-      !excludedColumnTitles.includes(col.title) // Exclude specific columns
-    );
+    const editableColumns = columns.filter(col => {
+      // Skip system columns
+      if (col.type === 'name' || col.type === 'auto_number' || 
+          col.type === 'creation_log' || col.type === 'last_updated' ||
+          col.type === 'dependency' || col.type === 'file') {
+        return false;
+      }
+      
+      // Skip excluded titles
+      if (excludedColumnTitles.includes(col.title)) {
+        return false;
+      }
+      
+      // Include tags columns explicitly
+      if (col.type === 'tag' || col.type === 'tags') {
+        console.log(`✓ Including tags column: ${col.title}`);
+        return true;
+      }
+      
+      // Include board_relation only if it's "Link to Bug Case"
+      if (col.type === 'board_relation') {
+        if (col.title === 'Link to Bug Case' || col.title.toLowerCase().includes('link to bug')) {
+          console.log(`✓ Including Link to Bug Case column: ${col.title}`);
+          return true;
+        }
+        return false;
+      }
+      
+      return true;
+    });
 
     if (editableColumns.length === 0) {
       container.innerHTML = '<p class="no-fields">No editable fields found in this board.</p>';
@@ -397,6 +427,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     editableColumns.forEach(column => {
+      console.log(`Rendering column: ${column.title} (${column.type})`);
+      
       const fieldDiv = document.createElement('div');
       fieldDiv.className = 'monday-field';
       fieldDiv.dataset.columnId = column.id;
@@ -412,6 +444,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (input) {
         fieldDiv.appendChild(input);
         container.appendChild(fieldDiv);
+      } else {
+        console.warn(`No input created for column: ${column.title} (${column.type})`);
       }
     });
   }
@@ -453,10 +487,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         return createCheckboxInput(column);
       
       case 'tag':
+      case 'tags':
         return createTagInput(column);
       
+      case 'board_relation':
+        // For Link to Bug Case - treat as a simple text/link input
+        if (column.title === 'Link to Bug Case' || column.title.toLowerCase().includes('link to bug')) {
+          return createLinkInput(column);
+        }
+        console.log(`Skipping board_relation column: ${column.title}`);
+        return null;
+      
       default:
-        console.log(`Unsupported column type: ${type}`);
+        console.log(`Unsupported column type: ${type} for column: ${column.title}`);
         return null;
     }
   }
@@ -667,6 +710,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function createTagInput(column) {
+    console.log('Creating tag input for column:', column.title, column.settings);
+    
     const container = document.createElement('div');
     container.className = 'tag-input-container';
     container.dataset.columnId = column.id;
@@ -697,15 +742,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Parse existing tags from settings
     const existingTags = [];
-    if (column.settings && column.settings.tags) {
-      column.settings.tags.forEach(tag => {
-        existingTags.push({
-          id: tag.id,
-          name: tag.name,
-          color: tag.color || '#808080'
+    
+    // Monday.com tags can be in different formats in settings
+    if (column.settings) {
+      console.log('Tag column settings:', column.settings);
+      
+      // Try different possible formats
+      const tags = column.settings.tags || column.settings.labels || [];
+      
+      if (Array.isArray(tags)) {
+        tags.forEach(tag => {
+          const tagObj = typeof tag === 'string' ? { id: tag, name: tag } : tag;
+          existingTags.push({
+            id: tagObj.id || tagObj.name,
+            name: tagObj.name || tagObj.id,
+            color: tagObj.color || '#808080'
+          });
         });
-      });
+      } else if (typeof tags === 'object') {
+        // Tags might be an object with tag IDs as keys
+        Object.entries(tags).forEach(([id, name]) => {
+          existingTags.push({
+            id: id,
+            name: typeof name === 'string' ? name : name.name || id,
+            color: '#808080'
+          });
+        });
+      }
     }
+    
+    console.log(`Found ${existingTags.length} existing tags for column ${column.title}:`, existingTags);
     
     // Render existing tags
     function renderTagsList(filter = '') {
@@ -857,16 +923,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     const columnValues = {};
     const fields = document.querySelectorAll('.monday-field');
     
+    console.log('Collecting column values from', fields.length, 'fields');
+    
     fields.forEach(field => {
       const columnId = field.dataset.columnId;
       const columnType = field.dataset.columnType;
+      
+      console.log(`Processing field: ${columnId} (${columnType})`);
       
       // Handle custom status dropdown
       const customDropdown = field.querySelector('.custom-status-dropdown');
       if (customDropdown && customDropdown.getValue) {
         const value = customDropdown.getValue();
         if (value && value !== '') {
-          columnValues[columnId] = formatColumnValue(columnType, value, null);
+          const formatted = formatColumnValue(columnType, value, null);
+          if (formatted !== null) {
+            columnValues[columnId] = formatted;
+            console.log(`  ✓ Added status value:`, formatted);
+          }
         }
         return;
       }
@@ -875,30 +949,46 @@ document.addEventListener('DOMContentLoaded', async () => {
       const tagInput = field.querySelector('.tag-input-container');
       if (tagInput && tagInput.getValue) {
         const tagData = tagInput.getValue();
+        console.log('  Tag data:', tagData);
         if (tagData.tagNames.size > 0 || tagData.tagIds.size > 0) {
-          columnValues[columnId] = formatColumnValue(columnType, tagData, null);
+          const formatted = formatColumnValue(columnType, tagData, null);
+          if (formatted !== null) {
+            columnValues[columnId] = formatted;
+            console.log(`  ✓ Added tags value:`, formatted);
+          }
         }
         return;
       }
       
       // Handle regular inputs
       const input = field.querySelector('.monday-field-input, .monday-field-checkbox');
-      if (!input) return;
+      if (!input) {
+        console.log('  ⚠️ No input found in field');
+        return;
+      }
       
       let value = input.value;
       
-      // Skip empty values
+      // Skip empty values (but still process them through formatColumnValue for proper handling)
       if (input.type === 'checkbox') {
         if (!input.checked) return;
         value = 'true';
       } else if (!value || value === '') {
+        console.log('  - Empty value, skipping');
         return;
       }
       
       // Format value based on column type
-      columnValues[columnId] = formatColumnValue(columnType, value, input);
+      const formatted = formatColumnValue(columnType, value, input);
+      if (formatted !== null) {
+        columnValues[columnId] = formatted;
+        console.log(`  ✓ Added value:`, formatted);
+      } else {
+        console.log('  - Formatted value is null, skipping');
+      }
     });
     
+    console.log('Final column values:', columnValues);
     return columnValues;
   }
 
@@ -913,8 +1003,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       case 'long_text':
       case 'email':
       case 'phone':
-      case 'link':
         return value;
+      
+      case 'link':
+        // Link columns need url and text
+        if (value && value.trim()) {
+          return {
+            url: value,
+            text: value
+          };
+        }
+        return null;
       
       case 'numbers':
       case 'numeric':
@@ -931,17 +1030,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         return { ids: [parseInt(value)] };
       
       case 'tag':
+      case 'tags':
         // Tags support both existing tag IDs and new tag names
-        const tagIds = Array.from(value.tagIds || []).map(id => parseInt(id));
+        const tagIds = Array.from(value.tagIds || []).map(id => {
+          // Handle both numeric IDs and string IDs
+          return isNaN(parseInt(id)) ? id : parseInt(id);
+        });
         const allTagNames = Array.from(value.tagNames || []);
         
-        // For Monday.com API, we can send tag IDs directly
-        // New tags (without IDs) will need to be created via the tag names
+        console.log('Formatting tags:', { tagIds, allTagNames });
+        
+        // For Monday.com tags column, we send tag IDs
+        // For new tags, we'll include them by name
         if (tagIds.length > 0 || allTagNames.length > 0) {
+          // Build tags array - Monday expects { tag_ids: [1, 2, 3] }
+          // or just the tag IDs as integers
+          return { tag_ids: tagIds.length > 0 ? tagIds : allTagNames };
+        }
+        return null;
+      
+      case 'board_relation':
+        // For Link to Bug Case - send as item IDs or URL
+        if (value && value.trim()) {
+          // If it's a URL or text, we might need to handle it differently
+          // For now, treat it as a simple link
           return {
-            tag_ids: tagIds,
-            // Include all tag names - Monday will handle duplicates
-            post_tags: allTagNames
+            url: value,
+            text: value
           };
         }
         return null;
