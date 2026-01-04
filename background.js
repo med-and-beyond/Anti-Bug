@@ -138,6 +138,7 @@ async function handleCreateBug(message, sendResponse) {
     const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
     
     // STEP 1: Confirm Tags column metadata
+    // NOTE: Variable named 'tagsColumnMeta' to avoid conflicts
     console.log('');
     console.log('========================================');
     console.log('STEP 1: TAGS COLUMN METADATA');
@@ -337,12 +338,13 @@ async function handleCreateBug(message, sendResponse) {
     }
     
     // STEP 2 & 3: Minimal Tags Update (Isolated)
+    // NOTE: Variable named 'tagsColumnForUpdate' to avoid conflicts with tagsColumnMeta above
     console.log('');
     console.log('========================================');
     console.log('STEP 2: MINIMAL TAGS UPDATE');
     console.log('========================================');
     
-    // Find tags column
+    // Find tags column for update
     const tagsColumnForUpdate = columns.find(col => col.type === 'tags' || col.type === 'tag');
     const tagsColumnValue = columnValues ? columnValues[tagsColumnForUpdate?.id] : null;
     
