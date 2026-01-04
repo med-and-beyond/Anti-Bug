@@ -65,7 +65,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const saved = state.createBugState;
     document.getElementById('title').value = saved.title || '';
     document.getElementById('platform').value = saved.platform || '';
-    document.getElementById('env').value = saved.env || '';
     document.getElementById('version').value = saved.version || '';
     document.getElementById('description').value = saved.description || '';
     document.getElementById('stepsToReproduce').value = saved.stepsToReproduce || '';
@@ -366,7 +365,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     const container = document.getElementById('mondayFieldsContainer');
     container.innerHTML = '';
 
-    // Filter out system columns that shouldn't be edited
+    // List of column titles to exclude from UI (will be set programmatically)
+    const excludedColumnTitles = [
+      'Internal Status',
+      'Estimated SP',
+      'Estimated QA',
+      'Actual SP',
+      'Link to PR',
+      'Custom AI prompt',
+      'QA Item Created',
+      'Status',
+      'Bug/Feature',
+      'Bug Status'
+    ];
+
+    // Filter out system columns and excluded columns
     const editableColumns = columns.filter(col => 
       col.type !== 'name' && // Item name (already used for title)
       col.type !== 'auto_number' && // Auto-generated
@@ -374,7 +387,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       col.type !== 'last_updated' && // System field
       col.type !== 'board_relation' && // Complex type
       col.type !== 'dependency' && // Complex type
-      col.type !== 'file' // Files handled separately
+      col.type !== 'file' && // Files handled separately
+      !excludedColumnTitles.includes(col.title) // Exclude specific columns
     );
 
     if (editableColumns.length === 0) {
@@ -437,6 +451,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       case 'checkbox':
         return createCheckboxInput(column);
+      
+      case 'tag':
+        return createTagInput(column);
       
       default:
         console.log(`Unsupported column type: ${type}`);
@@ -649,6 +666,193 @@ document.addEventListener('DOMContentLoaded', async () => {
     return checkbox;
   }
 
+  function createTagInput(column) {
+    const container = document.createElement('div');
+    container.className = 'tag-input-container';
+    container.dataset.columnId = column.id;
+    
+    // Selected tags display area
+    const selectedTagsDiv = document.createElement('div');
+    selectedTagsDiv.className = 'selected-tags';
+    selectedTagsDiv.innerHTML = '<span class="tag-placeholder">Click to add tags...</span>';
+    
+    // Dropdown panel for tag selection
+    const dropdownPanel = document.createElement('div');
+    dropdownPanel.className = 'tag-dropdown-panel';
+    dropdownPanel.style.display = 'none';
+    
+    // Search/create input
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'tag-search-input';
+    searchInput.placeholder = 'Search or create new tag...';
+    
+    // Available tags list
+    const tagsList = document.createElement('div');
+    tagsList.className = 'tags-list';
+    
+    // Store selected tag IDs and names
+    const selectedTags = new Set();
+    const selectedTagNames = new Set();
+    
+    // Parse existing tags from settings
+    const existingTags = [];
+    if (column.settings && column.settings.tags) {
+      column.settings.tags.forEach(tag => {
+        existingTags.push({
+          id: tag.id,
+          name: tag.name,
+          color: tag.color || '#808080'
+        });
+      });
+    }
+    
+    // Render existing tags
+    function renderTagsList(filter = '') {
+      tagsList.innerHTML = '';
+      
+      const filteredTags = existingTags.filter(tag => 
+        tag.name.toLowerCase().includes(filter.toLowerCase())
+      );
+      
+      if (filteredTags.length === 0 && filter) {
+        const createOption = document.createElement('div');
+        createOption.className = 'tag-option create-new';
+        createOption.innerHTML = `<span>+ Create "${filter}"</span>`;
+        createOption.dataset.newTag = filter;
+        tagsList.appendChild(createOption);
+      } else {
+        filteredTags.forEach(tag => {
+          const option = document.createElement('div');
+          option.className = 'tag-option';
+          if (selectedTags.has(tag.id)) {
+            option.classList.add('selected');
+          }
+          option.innerHTML = `
+            <span class="tag-checkbox">${selectedTags.has(tag.id) ? '☑' : '☐'}</span>
+            <span class="tag-name" style="color: ${tag.color}">${tag.name}</span>
+          `;
+          option.dataset.tagId = tag.id;
+          option.dataset.tagName = tag.name;
+          option.dataset.tagColor = tag.color;
+          tagsList.appendChild(option);
+        });
+      }
+    }
+    
+    // Update selected tags display
+    function updateSelectedDisplay() {
+      if (selectedTagNames.size === 0) {
+        selectedTagsDiv.innerHTML = '<span class="tag-placeholder">Click to add tags...</span>';
+      } else {
+        selectedTagsDiv.innerHTML = '';
+        selectedTagNames.forEach(tagName => {
+          const tagChip = document.createElement('span');
+          tagChip.className = 'tag-chip';
+          tagChip.innerHTML = `${tagName} <span class="tag-remove">×</span>`;
+          tagChip.dataset.tagName = tagName;
+          
+          tagChip.querySelector('.tag-remove').addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Remove from selected
+            selectedTagNames.delete(tagName);
+            // Find and remove the ID too
+            const tagData = existingTags.find(t => t.name === tagName);
+            if (tagData) {
+              selectedTags.delete(tagData.id);
+            }
+            updateSelectedDisplay();
+            renderTagsList(searchInput.value);
+          });
+          
+          selectedTagsDiv.appendChild(tagChip);
+        });
+      }
+    }
+    
+    // Toggle dropdown
+    selectedTagsDiv.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = dropdownPanel.style.display === 'block';
+      
+      // Close all other tag dropdowns
+      document.querySelectorAll('.tag-dropdown-panel').forEach(panel => {
+        panel.style.display = 'none';
+      });
+      
+      if (!isOpen) {
+        dropdownPanel.style.display = 'block';
+        searchInput.focus();
+      } else {
+        dropdownPanel.style.display = 'none';
+      }
+    });
+    
+    // Search functionality
+    searchInput.addEventListener('input', () => {
+      renderTagsList(searchInput.value);
+    });
+    
+    // Handle tag selection
+    tagsList.addEventListener('click', (e) => {
+      const option = e.target.closest('.tag-option');
+      if (!option) return;
+      
+      // Handle new tag creation
+      if (option.dataset.newTag) {
+        const newTagName = option.dataset.newTag;
+        selectedTagNames.add(newTagName);
+        // Store as new tag (no ID yet)
+        updateSelectedDisplay();
+        searchInput.value = '';
+        renderTagsList();
+        return;
+      }
+      
+      // Handle existing tag selection
+      const tagId = option.dataset.tagId;
+      const tagName = option.dataset.tagName;
+      
+      if (selectedTags.has(tagId)) {
+        selectedTags.delete(tagId);
+        selectedTagNames.delete(tagName);
+        option.classList.remove('selected');
+      } else {
+        selectedTags.add(tagId);
+        selectedTagNames.add(tagName);
+        option.classList.add('selected');
+      }
+      
+      updateSelectedDisplay();
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!container.contains(e.target)) {
+        dropdownPanel.style.display = 'none';
+      }
+    });
+    
+    // Initialize
+    renderTagsList();
+    
+    // Assemble container
+    dropdownPanel.appendChild(searchInput);
+    dropdownPanel.appendChild(tagsList);
+    container.appendChild(selectedTagsDiv);
+    container.appendChild(dropdownPanel);
+    
+    // Add getValue method for form collection
+    container.getValue = () => {
+      return {
+        tagIds: Array.from(selectedTags),
+        tagNames: Array.from(selectedTagNames)
+      };
+    };
+    
+    return container;
+  }
+
   function collectColumnValues() {
     const columnValues = {};
     const fields = document.querySelectorAll('.monday-field');
@@ -663,6 +867,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         const value = customDropdown.getValue();
         if (value && value !== '') {
           columnValues[columnId] = formatColumnValue(columnType, value, null);
+        }
+        return;
+      }
+      
+      // Handle tag input
+      const tagInput = field.querySelector('.tag-input-container');
+      if (tagInput && tagInput.getValue) {
+        const tagData = tagInput.getValue();
+        if (tagData.tagNames.size > 0 || tagData.tagIds.size > 0) {
+          columnValues[columnId] = formatColumnValue(columnType, tagData, null);
         }
         return;
       }
@@ -716,6 +930,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       case 'dropdown':
         return { ids: [parseInt(value)] };
       
+      case 'tag':
+        // Tags support both existing tag IDs and new tag names
+        const tagIds = Array.from(value.tagIds || []).map(id => parseInt(id));
+        const allTagNames = Array.from(value.tagNames || []);
+        
+        // For Monday.com API, we can send tag IDs directly
+        // New tags (without IDs) will need to be created via the tag names
+        if (tagIds.length > 0 || allTagNames.length > 0) {
+          return {
+            tag_ids: tagIds,
+            // Include all tag names - Monday will handle duplicates
+            post_tags: allTagNames
+          };
+        }
+        return null;
+      
       default:
         return value;
     }
@@ -767,7 +997,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         createBugState: {
           title: document.getElementById('title').value,
           platform: document.getElementById('platform').value,
-          env: document.getElementById('env').value,
           version: document.getElementById('version').value,
           description: document.getElementById('description').value,
           stepsToReproduce: document.getElementById('stepsToReproduce').value,
@@ -1006,7 +1235,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       const bugData = {
         title: title,
         platform: document.getElementById('platform').value,
-        env: document.getElementById('env').value,
         version: document.getElementById('version').value,
         description: description,
         stepsToReproduce: stepsToReproduce,

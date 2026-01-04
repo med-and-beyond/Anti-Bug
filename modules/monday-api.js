@@ -344,11 +344,6 @@ export class MondayAPI {
       updateText += `📱 Platform: ${bugData.platform}\n`;
     }
     
-    // Add environment
-    if (bugData.env) {
-      updateText += `🌍 ENV: ${bugData.env}\n`;
-    }
-    
     // Add version
     if (bugData.version) {
       updateText += `📦 Version: ${bugData.version}\n`;
@@ -414,9 +409,6 @@ export class MondayAPI {
     // Example mapping (adjust based on actual Monday board columns)
     if (bugData.platform) {
       values.platform = { text: bugData.platform };
-    }
-    if (bugData.env) {
-      values.environment = { text: bugData.env };
     }
     if (bugData.version) {
       values.version = { text: bugData.version };

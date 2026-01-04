@@ -121,6 +121,40 @@ async function handleCreateBug(message, sendResponse) {
     
     mondayAPI.setToken(settings.mondayToken);
     
+    // Fetch board columns to find default value column IDs
+    console.log('Fetching board columns for forced defaults...');
+    const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
+    
+    // Find columns that need forced defaults
+    const defaultColumns = {};
+    columns.forEach(col => {
+      if (col.title === 'Status') {
+        defaultColumns.status = { id: col.id, type: col.type };
+      } else if (col.title === 'Bug/Feature') {
+        defaultColumns.bugFeature = { id: col.id, type: col.type };
+      } else if (col.title === 'Bug Status') {
+        defaultColumns.bugStatus = { id: col.id, type: col.type };
+      }
+    });
+    
+    // Merge forced defaults with user-provided column values
+    const forcedDefaults = {};
+    if (defaultColumns.status) {
+      forcedDefaults[defaultColumns.status.id] = { label: 'Ready for Development' };
+      console.log('Forcing Status to "Ready for Development"');
+    }
+    if (defaultColumns.bugFeature) {
+      forcedDefaults[defaultColumns.bugFeature.id] = { label: 'Bug' };
+      console.log('Forcing Bug/Feature to "Bug"');
+    }
+    if (defaultColumns.bugStatus) {
+      forcedDefaults[defaultColumns.bugStatus.id] = { label: 'Open' };
+      console.log('Forcing Bug Status to "Open"');
+    }
+    
+    // Merge: forced defaults override user values for these specific columns
+    const finalColumnValues = { ...columnValues, ...forcedDefaults };
+    
     // Create the bug item with attachments
     // The mondayAPI will handle file uploads internally
     console.log(`Creating bug item with ${attachments.length} attachments...`);
@@ -134,14 +168,14 @@ async function handleCreateBug(message, sendResponse) {
     console.log('Bug creation complete:', item);
     console.log('Upload results:', item.uploadResults);
     
-    // Update column values if provided
-    if (columnValues && Object.keys(columnValues).length > 0) {
-      console.log('Updating column values:', columnValues);
+    // Update column values if provided (including forced defaults)
+    if (finalColumnValues && Object.keys(finalColumnValues).length > 0) {
+      console.log('Updating column values:', finalColumnValues);
       try {
         await mondayAPI.updateColumnValues(
           settings.selectedBoardId,
           item.id,
-          columnValues
+          finalColumnValues
         );
         console.log('Column values updated successfully');
       } catch (columnError) {
