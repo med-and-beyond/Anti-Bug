@@ -376,7 +376,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       'QA Item Created',
       'Status',
       'Bug/Feature',
-      'Bug Status'
+      'Bug Status',
+      'Environment'
     ];
 
     // Debug: Log all column types to see what Monday returns
