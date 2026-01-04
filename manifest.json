@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Anti Bugs",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Track and eliminate bugs efficiently with Anti Bugs - direct integration with Monday.com, including HAR capture, screenshots, and annotations",
   "permissions": [
     "activeTab",

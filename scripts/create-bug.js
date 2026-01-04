@@ -70,7 +70,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('stepsToReproduce').value = saved.stepsToReproduce || '';
     document.getElementById('actualResult').value = saved.actualResult || '';
     document.getElementById('expectedResult').value = saved.expectedResult || '';
-    document.getElementById('linkToBugCase').value = saved.linkToBugCase || '';
     
     // Restore attachments
     if (saved.attachedFiles) {
@@ -397,19 +396,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (col.type === 'name' || col.type === 'auto_number' || 
           col.type === 'creation_log' || col.type === 'last_updated' ||
           col.type === 'dependency' || col.type === 'file' || 
-          col.type === 'board_relation') {
+          col.type === 'board_relation' || col.type === 'tag' || col.type === 'tags') {
         return false;
       }
       
       // Skip excluded titles
       if (excludedColumnTitles.includes(col.title)) {
         return false;
-      }
-      
-      // Include tags columns explicitly
-      if (col.type === 'tag' || col.type === 'tags') {
-        console.log(`✓ Including tags column: ${col.title}`);
-        return true;
       }
       
       return true;
@@ -479,16 +472,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       case 'checkbox':
         return createCheckboxInput(column);
-      
-      case 'tag':
-      case 'tags':
-        return createTagInput(column);
-      
-      case 'board_relation':
-        // Board relation columns need item IDs, not URLs
-        // Skip for now - these require special handling with item search/selection
-        console.log(`Skipping board_relation column: ${column.title} (requires item IDs, not supported in this version)`);
-        return null;
       
       default:
         console.log(`Unsupported column type: ${type} for column: ${column.title}`);
@@ -713,227 +696,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     return checkbox;
   }
 
-  function createTagInput(column) {
-    console.log('Creating tag input for column:', column.title, column.settings);
-    
-    // Check if this is fallback mode (no predefined tags)
-    const hasPredefinedTags = !!(column.settings?.tags && Array.isArray(column.settings.tags) && column.settings.tags.length > 0);
-    
-    const container = document.createElement('div');
-    container.className = 'tag-input-container';
-    container.dataset.columnId = column.id;
-    
-    // Add fallback mode indicator
-    if (!hasPredefinedTags) {
-      const fallbackNote = document.createElement('div');
-      fallbackNote.className = 'tag-fallback-note';
-      fallbackNote.innerHTML = '⚠️ <strong>Saved as text</strong> (API limitation) - Tags will be stored in "Tags (manual)" column';
-      container.appendChild(fallbackNote);
-    }
-    
-    // Selected tags display area
-    const selectedTagsDiv = document.createElement('div');
-    selectedTagsDiv.className = 'selected-tags';
-    selectedTagsDiv.innerHTML = '<span class="tag-placeholder">Click to add tags...</span>';
-    
-    // Dropdown panel for tag selection
-    const dropdownPanel = document.createElement('div');
-    dropdownPanel.className = 'tag-dropdown-panel';
-    dropdownPanel.style.display = 'none';
-    
-    // Search/create input
-    const searchInput = document.createElement('input');
-    searchInput.type = 'text';
-    searchInput.className = 'tag-search-input';
-    searchInput.placeholder = 'Search or create new tag...';
-    
-    // Available tags list
-    const tagsList = document.createElement('div');
-    tagsList.className = 'tags-list';
-    
-    // Store selected tag IDs and names
-    const selectedTags = new Set();
-    const selectedTagNames = new Set();
-    
-    // Parse existing tags from settings
-    const existingTags = [];
-    
-    // Monday.com tags can be in different formats in settings
-    if (column.settings) {
-      console.log('Tag column settings:', column.settings);
-      
-      // Try different possible formats
-      const tags = column.settings.tags || column.settings.labels || [];
-      
-      if (Array.isArray(tags)) {
-        tags.forEach(tag => {
-          const tagObj = typeof tag === 'string' ? { id: tag, name: tag } : tag;
-          existingTags.push({
-            id: tagObj.id || tagObj.name,
-            name: tagObj.name || tagObj.id,
-            color: tagObj.color || '#808080'
-          });
-        });
-      } else if (typeof tags === 'object') {
-        // Tags might be an object with tag IDs as keys
-        Object.entries(tags).forEach(([id, name]) => {
-          existingTags.push({
-            id: id,
-            name: typeof name === 'string' ? name : name.name || id,
-            color: '#808080'
-          });
-        });
-      }
-    }
-    
-    console.log(`Found ${existingTags.length} existing tags for column ${column.title}:`, existingTags);
-    
-    // Render existing tags
-    function renderTagsList(filter = '') {
-      tagsList.innerHTML = '';
-      
-      const filteredTags = existingTags.filter(tag => 
-        tag.name.toLowerCase().includes(filter.toLowerCase())
-      );
-      
-      if (filteredTags.length === 0 && filter) {
-        const createOption = document.createElement('div');
-        createOption.className = 'tag-option create-new';
-        createOption.innerHTML = `<span>+ Create "${filter}"</span>`;
-        createOption.dataset.newTag = filter;
-        tagsList.appendChild(createOption);
-      } else {
-        filteredTags.forEach(tag => {
-          const option = document.createElement('div');
-          option.className = 'tag-option';
-          if (selectedTags.has(tag.id)) {
-            option.classList.add('selected');
-          }
-          option.innerHTML = `
-            <span class="tag-checkbox">${selectedTags.has(tag.id) ? '☑' : '☐'}</span>
-            <span class="tag-name" style="color: ${tag.color}">${tag.name}</span>
-          `;
-          option.dataset.tagId = tag.id;
-          option.dataset.tagName = tag.name;
-          option.dataset.tagColor = tag.color;
-          tagsList.appendChild(option);
-        });
-      }
-    }
-    
-    // Update selected tags display
-    function updateSelectedDisplay() {
-      if (selectedTagNames.size === 0) {
-        selectedTagsDiv.innerHTML = '<span class="tag-placeholder">Click to add tags...</span>';
-      } else {
-        selectedTagsDiv.innerHTML = '';
-        selectedTagNames.forEach(tagName => {
-          const tagChip = document.createElement('span');
-          tagChip.className = 'tag-chip';
-          tagChip.innerHTML = `${tagName} <span class="tag-remove">×</span>`;
-          tagChip.dataset.tagName = tagName;
-          
-          tagChip.querySelector('.tag-remove').addEventListener('click', (e) => {
-            e.stopPropagation();
-            // Remove from selected
-            selectedTagNames.delete(tagName);
-            // Find and remove the ID too
-            const tagData = existingTags.find(t => t.name === tagName);
-            if (tagData) {
-              selectedTags.delete(tagData.id);
-            }
-            updateSelectedDisplay();
-            renderTagsList(searchInput.value);
-          });
-          
-          selectedTagsDiv.appendChild(tagChip);
-        });
-      }
-    }
-    
-    // Toggle dropdown
-    selectedTagsDiv.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isOpen = dropdownPanel.style.display === 'block';
-      
-      // Close all other tag dropdowns
-      document.querySelectorAll('.tag-dropdown-panel').forEach(panel => {
-        panel.style.display = 'none';
-      });
-      
-      if (!isOpen) {
-        dropdownPanel.style.display = 'block';
-        searchInput.focus();
-      } else {
-        dropdownPanel.style.display = 'none';
-      }
-    });
-    
-    // Search functionality
-    searchInput.addEventListener('input', () => {
-      renderTagsList(searchInput.value);
-    });
-    
-    // Handle tag selection
-    tagsList.addEventListener('click', (e) => {
-      const option = e.target.closest('.tag-option');
-      if (!option) return;
-      
-      // Handle new tag creation
-      if (option.dataset.newTag) {
-        const newTagName = option.dataset.newTag;
-        selectedTagNames.add(newTagName);
-        // Store as new tag (no ID yet)
-        updateSelectedDisplay();
-        searchInput.value = '';
-        renderTagsList();
-        return;
-      }
-      
-      // Handle existing tag selection
-      const tagId = option.dataset.tagId;
-      const tagName = option.dataset.tagName;
-      
-      if (selectedTags.has(tagId)) {
-        selectedTags.delete(tagId);
-        selectedTagNames.delete(tagName);
-        option.classList.remove('selected');
-      } else {
-        selectedTags.add(tagId);
-        selectedTagNames.add(tagName);
-        option.classList.add('selected');
-      }
-      
-      updateSelectedDisplay();
-    });
-    
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-      if (!container.contains(e.target)) {
-        dropdownPanel.style.display = 'none';
-      }
-    });
-    
-    // Initialize
-    renderTagsList();
-    
-    // Assemble container
-    dropdownPanel.appendChild(searchInput);
-    dropdownPanel.appendChild(tagsList);
-    container.appendChild(selectedTagsDiv);
-    container.appendChild(dropdownPanel);
-    
-    // Add getValue method for form collection
-    container.getValue = () => {
-      return {
-        tagIds: Array.from(selectedTags),
-        tagNames: Array.from(selectedTagNames)
-      };
-    };
-    
-    return container;
-  }
-
   function collectColumnValues() {
     const columnValues = {};
     const fields = document.querySelectorAll('.monday-field');
@@ -960,21 +722,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
       
-      // Handle tag input
-      const tagInput = field.querySelector('.tag-input-container');
-      if (tagInput && tagInput.getValue) {
-        const tagData = tagInput.getValue();
-        console.log('  Tag data:', tagData);
-        if (tagData.tagNames.size > 0 || tagData.tagIds.size > 0) {
-          const formatted = formatColumnValue(columnType, tagData, null);
-          if (formatted !== null) {
-            columnValues[columnId] = formatted;
-            console.log(`  ✓ Added tags value:`, formatted);
-          }
-        }
-        return;
-      }
-      
       // Handle regular inputs
       const input = field.querySelector('.monday-field-input, .monday-field-checkbox');
       if (!input) {
@@ -984,7 +731,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       let value = input.value;
       
-      // Skip empty values (but still process them through formatColumnValue for proper handling)
+      // Skip empty values
       if (input.type === 'checkbox') {
         if (!input.checked) return;
         value = 'true';
@@ -1018,17 +765,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       case 'long_text':
       case 'email':
       case 'phone':
-        return value;
-      
       case 'link':
-        // Link columns need url and text
-        if (value && value.trim()) {
-          return {
-            url: value,
-            text: value
-          };
-        }
-        return null;
+        return value;
       
       case 'numbers':
       case 'numeric':
@@ -1043,62 +781,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       case 'dropdown':
         return { ids: [parseInt(value)] };
-      
-      case 'tag':
-      case 'tags':
-        // Tags support both existing tag IDs and new tag names
-        const tagIds = Array.from(value.tagIds || []);
-        const allTagNames = Array.from(value.tagNames || []);
-        
-        console.log('Formatting tags - IDs:', tagIds, 'Names:', allTagNames);
-        
-        // Monday.com tags column expects tag IDs as integers
-        // For new tags, we need to send them by name
-        if (tagIds.length === 0 && allTagNames.length === 0) {
-          return null;
-        }
-        
-        // Build the payload - Monday expects an object with tag_ids array
-        // and optionally tag names for new tags
-        const tagsPayload = {};
-        
-        // Add existing tag IDs (must be integers)
-        if (tagIds.length > 0) {
-          tagsPayload.tag_ids = tagIds.map(id => parseInt(id));
-        }
-        
-        // For new tags (names without IDs), we might need to send them as additional_tags or post_tags
-        // Let's try the format Monday uses for creating new tags
-        const newTags = allTagNames.filter(name => {
-          // Filter out names that correspond to existing IDs
-          return !tagIds.includes(name);
-        });
-        
-        if (newTags.length > 0) {
-          // Try sending new tags as plain tag IDs (using the name as ID for now)
-          // Monday might auto-create them
-          console.log('New tags to create:', newTags);
-          if (!tagsPayload.tag_ids) {
-            tagsPayload.tag_ids = [];
-          }
-          // Add new tag names to the array
-          tagsPayload.tag_ids.push(...newTags);
-        }
-        
-        console.log('Final tags payload:', tagsPayload);
-        return tagsPayload;
-      
-      case 'board_relation':
-        // For Link to Bug Case - send as item IDs or URL
-        if (value && value.trim()) {
-          // If it's a URL or text, we might need to handle it differently
-          // For now, treat it as a simple link
-          return {
-            url: value,
-            text: value
-          };
-        }
-        return null;
       
       default:
         return value;
@@ -1156,7 +838,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           stepsToReproduce: document.getElementById('stepsToReproduce').value,
           actualResult: document.getElementById('actualResult').value,
           expectedResult: document.getElementById('expectedResult').value,
-          linkToBugCase: document.getElementById('linkToBugCase').value,
           boardId: boardSelect.value,
           groupId: groupSelect.value,
           attachedFiles: attachedFiles
@@ -1394,8 +1075,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         description: description,
         stepsToReproduce: stepsToReproduce,
         actualResult: document.getElementById('actualResult').value,
-        expectedResult: document.getElementById('expectedResult').value,
-        linkToBugCase: document.getElementById('linkToBugCase').value
+        expectedResult: document.getElementById('expectedResult').value
       };
 
       console.log('Bug data:', bugData);

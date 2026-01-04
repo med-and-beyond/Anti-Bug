@@ -137,57 +137,6 @@ async function handleCreateBug(message, sendResponse) {
     console.log('Fetching board columns for updates...');
     const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
     
-    // STEP 1: Detect Tags Support
-    console.log('');
-    console.log('========================================');
-    console.log('STEP 1: TAGS COLUMN DETECTION');
-    console.log('========================================');
-    
-    const tagsColumnMeta = columns.find(col => col.type === 'tags' || col.type === 'tag');
-    const hasPredefinedTags = !!(tagsColumnMeta?.settings?.tags && 
-                                  Array.isArray(tagsColumnMeta.settings.tags) && 
-                                  tagsColumnMeta.settings.tags.length > 0);
-    
-    if (tagsColumnMeta) {
-      console.log('✅ Tags column found:');
-      console.log('   Column ID:', tagsColumnMeta.id);
-      console.log('   Column Title:', tagsColumnMeta.title);
-      console.log('   Column Type:', tagsColumnMeta.type);
-      console.log('   Has Predefined Tags:', hasPredefinedTags);
-      
-      if (hasPredefinedTags) {
-        console.log('   ✅ API-Compatible Tags (predefined tags exist)');
-        console.log('   Predefined tags in board:');
-        tagsColumnMeta.settings.tags.forEach(tag => {
-          console.log(`     • ID: ${tag.id} | Name: "${tag.name}"`);
-        });
-      } else {
-        console.log('   ⚠️  Free-Text Tags (no predefined tags)');
-        console.log('   → Monday API does not support updating free-text tags');
-        console.log('   → Will use fallback: "Tags (manual)" text column');
-      }
-    } else {
-      console.log('❌ No Tags column found in board');
-    }
-    
-    // Check for fallback text column
-    const fallbackColumn = columns.find(col => 
-      col.type === 'text' && 
-      (col.title === 'Tags (manual)' || col.title === 'Tags Manual')
-    );
-    
-    if (!hasPredefinedTags) {
-      if (fallbackColumn) {
-        console.log('   ✅ Fallback column found: "' + fallbackColumn.title + '" (ID: ' + fallbackColumn.id + ')');
-      } else {
-        console.log('   ⚠️  Fallback column "Tags (manual)" not found');
-        console.log('   → Please create a TEXT column named "Tags (manual)" for tag storage');
-      }
-    }
-    
-    console.log('========================================');
-    console.log('');
-    
     // Find columns that need forced defaults
     const defaultColumns = {};
     columns.forEach(col => {
@@ -200,8 +149,8 @@ async function handleCreateBug(message, sendResponse) {
       }
     });
     
-    // STEP 1: Apply enforced defaults FIRST (separate mutation)
-    console.log('=== STEP 1: Applying enforced defaults ===');
+    // Apply enforced defaults FIRST (separate mutation)
+    console.log('=== Applying enforced defaults ===');
     const forcedDefaults = {};
     
     if (defaultColumns.status && defaultColumns.status.settings) {
@@ -243,52 +192,8 @@ async function handleCreateBug(message, sendResponse) {
       }
     }
     
-    // Handle Link to Bug Case from bugData (if provided)
-    if (bugData.linkToBugCase && bugData.linkToBugCase.trim()) {
-      console.log('🔗 Link to Bug Case provided:', bugData.linkToBugCase);
-      console.log('🔍 Looking for Link or Text column (NOT board-relation)...');
-      
-      // Find a Link or Text column (explicitly exclude board-relation)
-      const linkColumn = columns.find(col => {
-        const titleMatches = col.title === 'Link to Bug Case' || 
-                            col.title.toLowerCase().includes('link to bug') ||
-                            col.title === 'Bug Case Link' ||
-                            col.title === 'Bug Case URL';
-        
-        const isLinkOrText = col.type === 'text' || col.type === 'link' || col.type === 'url';
-        const notBoardRelation = col.type !== 'board_relation';
-        
-        if (titleMatches) {
-          console.log(`  Found column "${col.title}" with type: ${col.type}`);
-        }
-        
-        return titleMatches && isLinkOrText && notBoardRelation;
-      });
-      
-      if (linkColumn) {
-        console.log(`✅ Using column: "${linkColumn.title}" (${linkColumn.type}) for Link to Bug Case`);
-        
-        // Add to columnValues with proper format
-        if (linkColumn.type === 'link' || linkColumn.type === 'url') {
-          columnValues[linkColumn.id] = {
-            url: bugData.linkToBugCase,
-            text: bugData.linkToBugCase
-          };
-          console.log(`  Format: Link column {url: "...", text: "..."}`);
-        } else {
-          // Text column - plain string
-          columnValues[linkColumn.id] = bugData.linkToBugCase;
-          console.log(`  Format: Text column (plain string)`);
-        }
-      } else {
-        console.warn('⚠️  No suitable Link or Text column found for "Link to Bug Case"');
-        console.log('Available columns:', columns.map(c => `${c.title} (${c.type})`).join(', '));
-        console.log('💡 Please create a Link or Text column named "Link to Bug Case" in your Monday board');
-      }
-    }
-    
-    // STEP 2: Apply user-selected values (one by one to prevent cascading failures)
-    console.log('=== STEP 2: Applying user-selected values ===');
+    // Apply user-selected values (one by one to prevent cascading failures)
+    console.log('=== Applying user-selected values ===');
     if (columnValues && Object.keys(columnValues).length > 0) {
       const successfulUpdates = [];
       const failedUpdates = [];
@@ -323,14 +228,9 @@ async function handleCreateBug(message, sendResponse) {
               failedUpdates.push({ columnId, error: 'Label not found or deactivated' });
             }
           }
-          // Special handling for tags columns - DO NOT PROCESS IN LOOP
-          else if (columnMeta && (columnMeta.type === 'tag' || columnMeta.type === 'tags')) {
-            console.log(`  ⏭️  Skipping tags column ${columnId} in main loop (will be processed separately)`);
-            continue;
-          }
-          // Skip board-relation columns for now (Link to Bug Case needs item IDs)
-          else if (columnMeta && columnMeta.type === 'board_relation') {
-            console.log(`  ⏭️  Skipping board_relation column ${columnId} (not yet supported)`);
+          // Skip unsupported column types
+          else if (columnMeta && (columnMeta.type === 'tag' || columnMeta.type === 'tags' || columnMeta.type === 'board_relation')) {
+            console.log(`  ⏭️  Skipping unsupported column ${columnId} (${columnMeta.type})`);
             continue;
           }
           // Handle other columns normally
@@ -354,129 +254,6 @@ async function handleCreateBug(message, sendResponse) {
       if (failedUpdates.length > 0) {
         console.warn(`⚠️  Failed to update ${failedUpdates.length} columns:`, failedUpdates);
       }
-    }
-    
-    // STEP 2: Tags Update (with fallback)
-    console.log('');
-    console.log('========================================');
-    console.log('STEP 2: TAGS UPDATE');
-    console.log('========================================');
-    
-    const tagsColumnForUpdate = columns.find(col => col.type === 'tags' || col.type === 'tag');
-    const tagsColumnValue = columnValues ? columnValues[tagsColumnForUpdate?.id] : null;
-    
-    if (!tagsColumnValue || !tagsColumnValue.tag_ids || !Array.isArray(tagsColumnValue.tag_ids) || tagsColumnValue.tag_ids.length === 0) {
-      console.log('⏭️  No tags provided by user - skipping');
-      console.log('========================================');
-    } else {
-      const tagIdsOrNames = tagsColumnValue.tag_ids;
-      console.log('✅ User provided tags:', tagIdsOrNames);
-      
-      // Determine mode: API-compatible or fallback
-      if (hasPredefinedTags) {
-        // MODE 1: API-Compatible Tags (predefined tags exist)
-        console.log('');
-        console.log('📌 MODE: API-Compatible Tags');
-        console.log('   Using tag_ids to update Monday tags column');
-        
-        try {
-          // Map tag names to IDs
-          const tagIds = [];
-          const unmatchedTags = [];
-          
-          for (const item of tagIdsOrNames) {
-            const itemStr = String(item);
-            
-            // Check if it's already a numeric ID
-            if (/^\d+$/.test(itemStr)) {
-              tagIds.push(parseInt(itemStr));
-              console.log(`   ✓ Tag ID: ${itemStr}`);
-            } else {
-              // Try to find by name in predefined tags
-              const matchedTag = tagsColumnMeta.settings.tags.find(t => 
-                t.name.toLowerCase() === itemStr.toLowerCase()
-              );
-              
-              if (matchedTag) {
-                tagIds.push(parseInt(matchedTag.id));
-                console.log(`   ✓ Mapped "${itemStr}" → ID: ${matchedTag.id}`);
-              } else {
-                unmatchedTags.push(itemStr);
-                console.log(`   ⚠️  "${itemStr}" not found in predefined tags`);
-              }
-            }
-          }
-          
-          if (tagIds.length > 0) {
-            const tagsPayload = { tag_ids: tagIds };
-            console.log('');
-            console.log('   Final payload:', JSON.stringify(tagsPayload));
-            console.log('   Updating column:', tagsColumnMeta.id);
-            
-            const updateResult = await mondayAPI.updateColumnValues(
-              settings.selectedBoardId,
-              item.id,
-              { [tagsColumnMeta.id]: tagsPayload }
-            );
-            
-            console.log('   ✅ Tags updated successfully');
-            console.log('   Applied tags:', tagIds.join(', '));
-            
-            if (unmatchedTags.length > 0) {
-              console.log('   ⚠️  Unmatched tags:', unmatchedTags.join(', '));
-            }
-          } else {
-            console.log('   ⚠️  No valid tag IDs to apply');
-          }
-          
-        } catch (error) {
-          console.error('   ❌ Failed to update tags:', error.message);
-        }
-        
-      } else {
-        // MODE 2: Fallback (free-text tags - not API compatible)
-        console.log('');
-        console.log('📝 MODE: Fallback (Free-Text Tags)');
-        console.log('   Monday API does not support free-text tags');
-        console.log('   Saving to "Tags (manual)" text column instead');
-        
-        // Find or suggest fallback column
-        const fallbackTextColumn = columns.find(col => 
-          col.type === 'text' && 
-          (col.title === 'Tags (manual)' || col.title === 'Tags Manual')
-        );
-        
-        if (!fallbackTextColumn) {
-          console.log('');
-          console.log('   ❌ Fallback column "Tags (manual)" not found!');
-          console.log('   ℹ️  To enable tag storage, create a TEXT column named "Tags (manual)"');
-          console.log('   User tags will not be saved until this column exists.');
-        } else {
-          try {
-            // Convert tags to text format: #tag1 #tag2 #tag3
-            const tagNames = tagIdsOrNames.map(tag => String(tag));
-            const tagsText = tagNames.map(name => `#${name}`).join(' ');
-            
-            console.log('   Tags to save:', tagNames.join(', '));
-            console.log('   Formatted text:', tagsText);
-            console.log('   Target column:', fallbackTextColumn.title, '(ID:', fallbackTextColumn.id + ')');
-            
-            const updateResult = await mondayAPI.updateColumnValues(
-              settings.selectedBoardId,
-              item.id,
-              { [fallbackTextColumn.id]: tagsText }
-            );
-            
-            console.log('   ✅ Tags saved to text column successfully');
-            console.log('   Note: These are stored as text, not Monday tags');
-            
-          } catch (error) {
-            console.error('   ❌ Failed to save tags to text column:', error.message);
-          }
-        }
-      }
-      
-      console.log('========================================');
     }
     
     // Clean up stored attachments
