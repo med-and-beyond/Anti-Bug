@@ -121,42 +121,7 @@ async function handleCreateBug(message, sendResponse) {
     
     mondayAPI.setToken(settings.mondayToken);
     
-    // Fetch board columns to find default value column IDs
-    console.log('Fetching board columns for forced defaults...');
-    const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
-    
-    // Find columns that need forced defaults
-    const defaultColumns = {};
-    columns.forEach(col => {
-      if (col.title === 'Status') {
-        defaultColumns.status = { id: col.id, type: col.type };
-      } else if (col.title === 'Bug/Feature') {
-        defaultColumns.bugFeature = { id: col.id, type: col.type };
-      } else if (col.title === 'Bug Status') {
-        defaultColumns.bugStatus = { id: col.id, type: col.type };
-      }
-    });
-    
-    // Merge forced defaults with user-provided column values
-    const forcedDefaults = {};
-    if (defaultColumns.status) {
-      forcedDefaults[defaultColumns.status.id] = { label: 'Ready for Development' };
-      console.log('Forcing Status to "Ready for Development"');
-    }
-    if (defaultColumns.bugFeature) {
-      forcedDefaults[defaultColumns.bugFeature.id] = { label: 'Bug' };
-      console.log('Forcing Bug/Feature to "Bug"');
-    }
-    if (defaultColumns.bugStatus) {
-      forcedDefaults[defaultColumns.bugStatus.id] = { label: 'Open' };
-      console.log('Forcing Bug Status to "Open"');
-    }
-    
-    // Merge: forced defaults override user values for these specific columns
-    const finalColumnValues = { ...columnValues, ...forcedDefaults };
-    
-    // Create the bug item with attachments
-    // The mondayAPI will handle file uploads internally
+    // Create the bug item with attachments first
     console.log(`Creating bug item with ${attachments.length} attachments...`);
     const item = await mondayAPI.createBugItem(
       settings.selectedBoardId,
@@ -168,19 +133,126 @@ async function handleCreateBug(message, sendResponse) {
     console.log('Bug creation complete:', item);
     console.log('Upload results:', item.uploadResults);
     
-    // Update column values if provided (including forced defaults)
-    if (finalColumnValues && Object.keys(finalColumnValues).length > 0) {
-      console.log('Updating column values:', finalColumnValues);
+    // Fetch board columns to find default value column IDs
+    console.log('Fetching board columns for updates...');
+    const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
+    
+    // Find columns that need forced defaults
+    const defaultColumns = {};
+    columns.forEach(col => {
+      if (col.title === 'Status') {
+        defaultColumns.status = { id: col.id, type: col.type, settings: col.settings };
+      } else if (col.title === 'Bug/Feature') {
+        defaultColumns.bugFeature = { id: col.id, type: col.type, settings: col.settings };
+      } else if (col.title === 'Bug Status') {
+        defaultColumns.bugStatus = { id: col.id, type: col.type, settings: col.settings };
+      }
+    });
+    
+    // STEP 1: Apply enforced defaults FIRST (separate mutation)
+    console.log('=== STEP 1: Applying enforced defaults ===');
+    const forcedDefaults = {};
+    
+    if (defaultColumns.status && defaultColumns.status.settings) {
+      const statusValue = mondayAPI.findLabelValue(defaultColumns.status.settings, 'Ready for Development');
+      if (statusValue) {
+        forcedDefaults[defaultColumns.status.id] = statusValue;
+        console.log('✓ Forcing Status to "Ready for Development"');
+      }
+    }
+    
+    if (defaultColumns.bugFeature && defaultColumns.bugFeature.settings) {
+      const bugFeatureValue = mondayAPI.findLabelValue(defaultColumns.bugFeature.settings, 'Bug');
+      if (bugFeatureValue) {
+        forcedDefaults[defaultColumns.bugFeature.id] = bugFeatureValue;
+        console.log('✓ Forcing Bug/Feature to "Bug"');
+      }
+    }
+    
+    if (defaultColumns.bugStatus && defaultColumns.bugStatus.settings) {
+      const bugStatusValue = mondayAPI.findLabelValue(defaultColumns.bugStatus.settings, 'Open');
+      if (bugStatusValue) {
+        forcedDefaults[defaultColumns.bugStatus.id] = bugStatusValue;
+        console.log('✓ Forcing Bug Status to "Open"');
+      }
+    }
+    
+    // Apply enforced defaults
+    if (Object.keys(forcedDefaults).length > 0) {
       try {
         await mondayAPI.updateColumnValues(
           settings.selectedBoardId,
           item.id,
-          finalColumnValues
+          forcedDefaults
         );
-        console.log('Column values updated successfully');
-      } catch (columnError) {
-        console.error('Failed to update column values:', columnError);
-        // Don't fail the whole operation if column updates fail
+        console.log('✅ Enforced defaults applied successfully');
+      } catch (defaultsError) {
+        console.error('❌ Failed to apply enforced defaults:', defaultsError);
+        // Continue anyway - we'll try individual updates
+      }
+    }
+    
+    // STEP 2: Apply user-selected values (one by one to prevent cascading failures)
+    console.log('=== STEP 2: Applying user-selected values ===');
+    if (columnValues && Object.keys(columnValues).length > 0) {
+      const successfulUpdates = [];
+      const failedUpdates = [];
+      
+      for (const [columnId, columnValue] of Object.entries(columnValues)) {
+        // Skip if this is one of the enforced default columns (already set)
+        const isDefaultColumn = Object.values(defaultColumns).some(col => col.id === columnId);
+        if (isDefaultColumn) {
+          console.log(`  ⏭️  Skipping ${columnId} (enforced default)`);
+          continue;
+        }
+        
+        try {
+          console.log(`  🔄 Updating column ${columnId}:`, columnValue);
+          
+          // Find column metadata
+          const columnMeta = columns.find(col => col.id === columnId);
+          
+          // Special handling for status/color columns - ensure we use label text
+          if (columnMeta && (columnMeta.type === 'status' || columnMeta.type === 'color')) {
+            const labelValue = mondayAPI.findLabelValue(columnMeta.settings, columnValue.label || columnValue);
+            if (labelValue) {
+              await mondayAPI.updateColumnValues(
+                settings.selectedBoardId,
+                item.id,
+                { [columnId]: labelValue }
+              );
+              successfulUpdates.push(columnId);
+              console.log(`  ✅ ${columnId} updated`);
+            } else {
+              console.warn(`  ⚠️  Label not found for ${columnId}: ${columnValue.label || columnValue}`);
+              failedUpdates.push({ columnId, error: 'Label not found or deactivated' });
+            }
+          }
+          // Skip board-relation columns for now (Link to Bug Case needs item IDs)
+          else if (columnMeta && columnMeta.type === 'board_relation') {
+            console.log(`  ⏭️  Skipping board_relation column ${columnId} (not yet supported)`);
+            continue;
+          }
+          // Handle other columns normally
+          else {
+            await mondayAPI.updateColumnValues(
+              settings.selectedBoardId,
+              item.id,
+              { [columnId]: columnValue }
+            );
+            successfulUpdates.push(columnId);
+            console.log(`  ✅ ${columnId} updated`);
+          }
+        } catch (columnError) {
+          console.error(`  ❌ Failed to update ${columnId}:`, columnError.message);
+          failedUpdates.push({ columnId, error: columnError.message });
+          // Continue with other columns
+        }
+      }
+      
+      console.log(`✅ Updated ${successfulUpdates.length} columns successfully`);
+      if (failedUpdates.length > 0) {
+        console.warn(`⚠️  Failed to update ${failedUpdates.length} columns:`, failedUpdates);
       }
     }
     

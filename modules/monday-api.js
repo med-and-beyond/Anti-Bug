@@ -249,6 +249,53 @@ export class MondayAPI {
     return [];
   }
 
+  findLabelValue(columnSettings, labelText) {
+    /**
+     * Find the correct label value format for a status/color column
+     * Returns the proper format based on active labels in column settings
+     */
+    if (!columnSettings || !labelText) {
+      return null;
+    }
+
+    console.log(`Finding label "${labelText}" in settings:`, columnSettings);
+
+    // Monday status/color columns have labels and labels_colors
+    const labels = columnSettings.labels || {};
+    const labelsColors = columnSettings.labels_colors || {};
+
+    // Find the label ID that matches the text (case-insensitive)
+    let matchedLabelId = null;
+    
+    // labels is an object like { "0": "Not Started", "1": "Working on it", ... }
+    for (const [labelId, labelName] of Object.entries(labels)) {
+      if (labelName && labelName.toLowerCase() === labelText.toLowerCase()) {
+        // Check if this label is active (has color info)
+        if (labelsColors[labelId]) {
+          matchedLabelId = labelId;
+          console.log(`✓ Found active label: "${labelText}" with ID ${labelId}`);
+          break;
+        } else {
+          console.warn(`⚠️  Label "${labelText}" (ID ${labelId}) exists but is deactivated`);
+        }
+      }
+    }
+
+    if (!matchedLabelId) {
+      console.warn(`❌ Label "${labelText}" not found in active labels`);
+      console.log('Available active labels:', 
+        Object.entries(labels)
+          .filter(([id]) => labelsColors[id])
+          .map(([id, name]) => name)
+      );
+      return null;
+    }
+
+    // Return the format Monday expects: { label: "Label Text" }
+    // Monday will match by text internally
+    return { label: labelText };
+  }
+
   async updateColumnValues(boardId, itemId, columnValues) {
     console.log('Updating column values for item:', itemId, columnValues);
     

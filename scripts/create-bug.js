@@ -395,7 +395,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Skip system columns
       if (col.type === 'name' || col.type === 'auto_number' || 
           col.type === 'creation_log' || col.type === 'last_updated' ||
-          col.type === 'dependency' || col.type === 'file') {
+          col.type === 'dependency' || col.type === 'file' || 
+          col.type === 'board_relation') {
         return false;
       }
       
@@ -408,15 +409,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (col.type === 'tag' || col.type === 'tags') {
         console.log(`✓ Including tags column: ${col.title}`);
         return true;
-      }
-      
-      // Include board_relation only if it's "Link to Bug Case"
-      if (col.type === 'board_relation') {
-        if (col.title === 'Link to Bug Case' || col.title.toLowerCase().includes('link to bug')) {
-          console.log(`✓ Including Link to Bug Case column: ${col.title}`);
-          return true;
-        }
-        return false;
       }
       
       return true;
@@ -492,11 +484,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         return createTagInput(column);
       
       case 'board_relation':
-        // For Link to Bug Case - treat as a simple text/link input
-        if (column.title === 'Link to Bug Case' || column.title.toLowerCase().includes('link to bug')) {
-          return createLinkInput(column);
-        }
-        console.log(`Skipping board_relation column: ${column.title}`);
+        // Board relation columns need item IDs, not URLs
+        // Skip for now - these require special handling with item search/selection
+        console.log(`Skipping board_relation column: ${column.title} (requires item IDs, not supported in this version)`);
         return null;
       
       default:
@@ -522,8 +512,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     dropdownPanel.className = 'status-dropdown-panel';
     dropdownPanel.style.display = 'none';
     
-    // Store selected value
+    // Store selected value (the label TEXT, not index)
     let selectedValue = '';
+    let selectedLabelId = '';
     
     // Add "Leave unchanged" option
     const emptyOption = document.createElement('div');
@@ -534,19 +525,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Parse labels from settings
     if (column.settings && column.settings.labels) {
-      Object.entries(column.settings.labels).forEach(([labelId, labelText]) => {
+      const labels = column.settings.labels;
+      const labelsColors = column.settings.labels_colors || {};
+      
+      Object.entries(labels).forEach(([labelId, labelText]) => {
+        // Only show active labels (those with color info)
+        if (!labelsColors[labelId]) {
+          console.log(`Skipping deactivated label: ${labelText} (ID: ${labelId})`);
+          return;
+        }
+        
         const option = document.createElement('div');
         option.className = 'status-option';
-        option.dataset.value = labelText;
+        option.dataset.value = labelText; // Store the TEXT, not the index
         option.dataset.labelId = labelId;
         
         // Get color - Monday already returns hex codes!
         let colorCode = '#333333';
         let colorName = 'black';
         
-        if (column.settings.labels_colors && column.settings.labels_colors[labelId]) {
-          const colorInfo = column.settings.labels_colors[labelId];
-          // Monday gives us the hex code directly in the 'color' field!
+        const colorInfo = labelsColors[labelId];
+        if (colorInfo) {
           colorCode = colorInfo.color || '#333333';
           colorName = colorInfo.var_name || 'black';
         }
@@ -580,8 +579,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       const option = e.target.closest('.status-option');
       if (!option) return;
       
-      selectedValue = option.dataset.value;
+      selectedValue = option.dataset.value; // This is the label TEXT
+      selectedLabelId = option.dataset.labelId;
       const colorCode = option.dataset.colorCode;
+      
+      console.log(`Selected label: "${selectedValue}" (ID: ${selectedLabelId})`);
       
       // Update display
       if (selectedValue === '') {
