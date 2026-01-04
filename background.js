@@ -275,60 +275,61 @@ async function handleCreateBug(message, sendResponse) {
           // Special handling for tags columns
           else if (columnMeta && (columnMeta.type === 'tag' || columnMeta.type === 'tags')) {
             console.log(`  📌 Tags column detected, payload:`, columnValue);
+            console.log(`  📌 Column ID: ${columnId}`);
+            console.log(`  📌 Column metadata:`, columnMeta);
             
-            // Monday expects tag IDs as STRINGS, not integers
-            // Format: { "tag_ids": ["id1", "id2", "id3"] }
+            // ========================================
+            // SANITY TEST: Send simple plain string
+            // ========================================
+            console.log('');
+            console.log('🧪 ========== SANITY TEST MODE ==========');
+            console.log('🧪 Sending PLAIN STRING to verify pipeline');
+            console.log('🧪 This is NOT the final tags format');
+            console.log('🧪 =======================================');
+            console.log('');
             
-            if (columnValue && columnValue.tag_ids && Array.isArray(columnValue.tag_ids)) {
-              const existingTagIds = [];
-              const newTagNames = [];
+            // Send a simple plain string value
+            const testPayload = "test-tag-rrr";
+            
+            console.log(`🧪 Test payload (plain string): "${testPayload}"`);
+            console.log(`🧪 Column ID: ${columnId}`);
+            console.log(`🧪 Item ID: ${item.id}`);
+            console.log(`🧪 Board ID: ${settings.selectedBoardId}`);
+            console.log('');
+            console.log('🧪 Sending update with:');
+            console.log('🧪 {');
+            console.log(`🧪   "${columnId}": "${testPayload}"`);
+            console.log('🧪 }');
+            console.log('');
+            
+            try {
+              const updateResult = await mondayAPI.updateColumnValues(
+                settings.selectedBoardId,
+                item.id,
+                { [columnId]: testPayload }  // Plain string!
+              );
               
-              // Separate existing IDs from new tag names
-              for (const tagId of columnValue.tag_ids) {
-                const idStr = tagId.toString();
-                // If it's numeric, it's an existing tag ID
-                if (!isNaN(parseInt(idStr))) {
-                  existingTagIds.push(idStr); // Store as STRING
-                } else {
-                  // It's a new tag name
-                  newTagNames.push(idStr);
-                }
-              }
+              console.log('');
+              console.log('🧪 ========== UPDATE RESULT ==========');
+              console.log('🧪 Success! Update returned:', updateResult);
+              console.log('🧪 ====================================');
+              console.log('');
               
-              console.log(`  📌 Existing tag IDs (strings):`, existingTagIds);
-              console.log(`  📌 New tag names to create:`, newTagNames);
+              successfulUpdates.push(columnId);
+              console.log(`  ✅ ${columnId} (tags) SANITY TEST completed`);
               
-              // Create new tags and get their IDs
-              const allTagIds = [...existingTagIds];
-              for (const tagName of newTagNames) {
-                try {
-                  console.log(`  🏷️  Creating/getting tag: "${tagName}"`);
-                  const newTagId = await mondayAPI.createOrGetTag(settings.selectedBoardId, tagName);
-                  allTagIds.push(newTagId); // Already a string
-                  console.log(`  ✅ Tag "${tagName}" created with ID: ${newTagId}`);
-                } catch (tagError) {
-                  console.error(`  ❌ Failed to create tag "${tagName}":`, tagError.message);
-                  // Continue with other tags
-                }
-              }
+            } catch (testError) {
+              console.log('');
+              console.log('🧪 ========== UPDATE FAILED ==========');
+              console.error('🧪 Error:', testError.message);
+              console.error('🧪 Full error:', testError);
+              console.log('🧪 ====================================');
+              console.log('');
               
-              // Now update the column with all tag IDs (as strings)
-              if (allTagIds.length > 0) {
-                const tagsPayload = { tag_ids: allTagIds };
-                console.log(`  📌 Final tags payload (all IDs as strings):`, tagsPayload);
-                
-                await mondayAPI.updateColumnValues(
-                  settings.selectedBoardId,
-                  item.id,
-                  { [columnId]: tagsPayload }
-                );
-                successfulUpdates.push(columnId);
-                console.log(`  ✅ ${columnId} (tags) updated with ${allTagIds.length} tag(s)`);
-              } else {
-                console.warn(`  ⚠️  No valid tags to apply`);
-              }
-            } else {
-              console.warn(`  ⚠️  Invalid tags payload format:`, columnValue);
+              failedUpdates.push({ 
+                columnId, 
+                error: `SANITY TEST FAILED: ${testError.message}` 
+              });
             }
           }
           // Skip board-relation columns for now (Link to Bug Case needs item IDs)

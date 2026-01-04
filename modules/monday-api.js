@@ -328,12 +328,18 @@ export class MondayAPI {
   }
 
   async updateColumnValues(boardId, itemId, columnValues) {
-    console.log('Updating column values for item:', itemId);
-    console.log('Column values:', JSON.stringify(columnValues, null, 2));
+    console.log('');
+    console.log('🔧 ========== Monday API Update ==========');
+    console.log('🔧 Board ID:', boardId);
+    console.log('🔧 Item ID:', itemId);
+    console.log('🔧 Column values object:');
+    console.log(JSON.stringify(columnValues, null, 2));
+    console.log('🔧 ========================================');
+    console.log('');
     
     // Convert columnValues object to JSON string format expected by Monday
     const columnValuesJson = JSON.stringify(columnValues);
-    console.log('Stringified column values:', columnValuesJson);
+    console.log('🔧 Stringified for Monday:', columnValuesJson);
     
     const mutation = `
       mutation {
@@ -348,9 +354,20 @@ export class MondayAPI {
       }
     `;
     
-    console.log('GraphQL mutation:', mutation);
+    console.log('');
+    console.log('🔧 ========== GraphQL Mutation ==========');
+    console.log(mutation);
+    console.log('🔧 ========================================');
+    console.log('');
 
+    console.log('🔧 Sending to Monday API...');
     const data = await this.query(mutation);
+    
+    console.log('');
+    console.log('🔧 ========== Monday Response ==========');
+    console.log('🔧 Response data:', JSON.stringify(data, null, 2));
+    console.log('🔧 ========================================');
+    console.log('');
 
     return data.change_multiple_column_values;
   }
