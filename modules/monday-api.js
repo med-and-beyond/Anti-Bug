@@ -249,12 +249,98 @@ export class MondayAPI {
     return [];
   }
 
+  async createOrGetTag(boardId, tagName) {
+    /**
+     * Create a new tag or get existing tag ID by name
+     * Returns the tag ID as a string
+     */
+    console.log(`Creating/getting tag "${tagName}" for board ${boardId}`);
+    
+    const mutation = `
+      mutation ($boardId: ID!, $tagName: String!) {
+        create_or_get_tag(board_id: $boardId, tag_name: $tagName) {
+          id
+          name
+        }
+      }
+    `;
+    
+    try {
+      const data = await this.query(mutation, {
+        boardId: parseInt(boardId),
+        tagName: tagName
+      });
+      
+      const tag = data.create_or_get_tag;
+      console.log(`✓ Tag "${tagName}" has ID: ${tag.id}`);
+      return tag.id.toString(); // Return as string
+    } catch (error) {
+      console.error(`Failed to create/get tag "${tagName}":`, error);
+      throw error;
+    }
+  }
+
+  findLabelValue(columnSettings, labelText) {
+    /**
+     * Find the correct label value format for a status/color column
+     * Returns the proper format based on active labels in column settings
+     */
+    if (!columnSettings || !labelText) {
+      return null;
+    }
+
+    console.log(`Finding label "${labelText}" in settings:`, columnSettings);
+
+    // Monday status/color columns have labels and labels_colors
+    const labels = columnSettings.labels || {};
+    const labelsColors = columnSettings.labels_colors || {};
+
+    // Find the label ID that matches the text (case-insensitive)
+    let matchedLabelId = null;
+    
+    // labels is an object like { "0": "Not Started", "1": "Working on it", ... }
+    for (const [labelId, labelName] of Object.entries(labels)) {
+      if (labelName && labelName.toLowerCase() === labelText.toLowerCase()) {
+        // Check if this label is active (has color info)
+        if (labelsColors[labelId]) {
+          matchedLabelId = labelId;
+          console.log(`✓ Found active label: "${labelText}" with ID ${labelId}`);
+          break;
+        } else {
+          console.warn(`⚠️  Label "${labelText}" (ID ${labelId}) exists but is deactivated`);
+        }
+      }
+    }
+
+    if (!matchedLabelId) {
+      console.warn(`❌ Label "${labelText}" not found in active labels`);
+      console.log('Available active labels:', 
+        Object.entries(labels)
+          .filter(([id]) => labelsColors[id])
+          .map(([id, name]) => name)
+      );
+      return null;
+    }
+
+    // Return the format Monday expects: { label: "Label Text" }
+    // Monday will match by text internally
+    return { label: labelText };
+  }
+
   async updateColumnValues(boardId, itemId, columnValues) {
-    console.log('Updating column values for item:', itemId, columnValues);
+    console.log('');
+    console.log('   ═══════════════════════════════════════');
+    console.log('   MONDAY API: change_multiple_column_values');
+    console.log('   ═══════════════════════════════════════');
+    console.log('   Board ID:', boardId);
+    console.log('   Item ID:', itemId);
+    console.log('   Column values:', JSON.stringify(columnValues, null, 2));
     
-    // Convert columnValues object to JSON string format expected by Monday
+    // Convert to JSON string (Monday format)
     const columnValuesJson = JSON.stringify(columnValues);
+    console.log('   Stringified:', columnValuesJson);
     
+    // Build mutation
     const mutation = `
       mutation {
         change_multiple_column_values(
@@ -267,8 +353,21 @@ export class MondayAPI {
         }
       }
     `;
+    
+    console.log('');
+    console.log('   GraphQL Mutation:');
+    console.log('   ' + mutation.trim().split('\n').join('\n   '));
+    console.log('');
 
+    // Send request
+    console.log('   📤 Sending to Monday...');
     const data = await this.query(mutation);
+    
+    console.log('');
+    console.log('   📥 Monday Response:');
+    console.log('   ' + JSON.stringify(data, null, 2).split('\n').join('\n   '));
+    console.log('   ═══════════════════════════════════════');
+    console.log('');
 
     return data.change_multiple_column_values;
   }
@@ -344,11 +443,6 @@ export class MondayAPI {
       updateText += `📱 Platform: ${bugData.platform}\n`;
     }
     
-    // Add environment
-    if (bugData.env) {
-      updateText += `🌍 ENV: ${bugData.env}\n`;
-    }
-    
     // Add version
     if (bugData.version) {
       updateText += `📦 Version: ${bugData.version}\n`;
@@ -414,9 +508,6 @@ export class MondayAPI {
     // Example mapping (adjust based on actual Monday board columns)
     if (bugData.platform) {
       values.platform = { text: bugData.platform };
-    }
-    if (bugData.env) {
-      values.environment = { text: bugData.env };
     }
     if (bugData.version) {
       values.version = { text: bugData.version };

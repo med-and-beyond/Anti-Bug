@@ -65,7 +65,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const saved = state.createBugState;
     document.getElementById('title').value = saved.title || '';
     document.getElementById('platform').value = saved.platform || '';
-    document.getElementById('env').value = saved.env || '';
     document.getElementById('version').value = saved.version || '';
     document.getElementById('description').value = saved.description || '';
     document.getElementById('stepsToReproduce').value = saved.stepsToReproduce || '';
@@ -366,16 +365,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     const container = document.getElementById('mondayFieldsContainer');
     container.innerHTML = '';
 
-    // Filter out system columns that shouldn't be edited
-    const editableColumns = columns.filter(col => 
-      col.type !== 'name' && // Item name (already used for title)
-      col.type !== 'auto_number' && // Auto-generated
-      col.type !== 'creation_log' && // System field
-      col.type !== 'last_updated' && // System field
-      col.type !== 'board_relation' && // Complex type
-      col.type !== 'dependency' && // Complex type
-      col.type !== 'file' // Files handled separately
-    );
+    // List of column titles to exclude from UI (will be set programmatically)
+    const excludedColumnTitles = [
+      'Internal Status',
+      'Estimated SP',
+      'Estimated QA',
+      'Actual SP',
+      'Link to PR',
+      'Custom AI prompt',
+      'QA Item Created',
+      'Status',
+      'Bug/Feature',
+      'Bug Status',
+      'Environment',
+      'Tags',
+      'Link to Bug Case'
+    ];
+
+    // Debug: Log all column types to see what Monday returns
+    console.log('=== MONDAY COLUMNS DEBUG ===');
+    columns.forEach(col => {
+      console.log(`Column: "${col.title}" | Type: "${col.type}" | ID: ${col.id}`);
+      if (col.settings) {
+        console.log(`  Settings:`, col.settings);
+      }
+    });
+    console.log('=== END DEBUG ===');
+
+    // Filter out system columns and excluded columns
+    const editableColumns = columns.filter(col => {
+      // Skip system columns
+      if (col.type === 'name' || col.type === 'auto_number' || 
+          col.type === 'creation_log' || col.type === 'last_updated' ||
+          col.type === 'dependency' || col.type === 'file' || 
+          col.type === 'board_relation' || col.type === 'tag' || col.type === 'tags') {
+        return false;
+      }
+      
+      // Skip excluded titles
+      if (excludedColumnTitles.includes(col.title)) {
+        return false;
+      }
+      
+      return true;
+    });
 
     if (editableColumns.length === 0) {
       container.innerHTML = '<p class="no-fields">No editable fields found in this board.</p>';
@@ -383,6 +416,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     editableColumns.forEach(column => {
+      console.log(`Rendering column: ${column.title} (${column.type})`);
+      
       const fieldDiv = document.createElement('div');
       fieldDiv.className = 'monday-field';
       fieldDiv.dataset.columnId = column.id;
@@ -398,6 +433,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (input) {
         fieldDiv.appendChild(input);
         container.appendChild(fieldDiv);
+      } else {
+        console.warn(`No input created for column: ${column.title} (${column.type})`);
       }
     });
   }
@@ -439,7 +476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return createCheckboxInput(column);
       
       default:
-        console.log(`Unsupported column type: ${type}`);
+        console.log(`Unsupported column type: ${type} for column: ${column.title}`);
         return null;
     }
   }
@@ -461,8 +498,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     dropdownPanel.className = 'status-dropdown-panel';
     dropdownPanel.style.display = 'none';
     
-    // Store selected value
+    // Store selected value (the label TEXT, not index)
     let selectedValue = '';
+    let selectedLabelId = '';
     
     // Add "Leave unchanged" option
     const emptyOption = document.createElement('div');
@@ -473,19 +511,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Parse labels from settings
     if (column.settings && column.settings.labels) {
-      Object.entries(column.settings.labels).forEach(([labelId, labelText]) => {
+      const labels = column.settings.labels;
+      const labelsColors = column.settings.labels_colors || {};
+      
+      Object.entries(labels).forEach(([labelId, labelText]) => {
+        // Only show active labels (those with color info)
+        if (!labelsColors[labelId]) {
+          console.log(`Skipping deactivated label: ${labelText} (ID: ${labelId})`);
+          return;
+        }
+        
         const option = document.createElement('div');
         option.className = 'status-option';
-        option.dataset.value = labelText;
+        option.dataset.value = labelText; // Store the TEXT, not the index
         option.dataset.labelId = labelId;
         
         // Get color - Monday already returns hex codes!
         let colorCode = '#333333';
         let colorName = 'black';
         
-        if (column.settings.labels_colors && column.settings.labels_colors[labelId]) {
-          const colorInfo = column.settings.labels_colors[labelId];
-          // Monday gives us the hex code directly in the 'color' field!
+        const colorInfo = labelsColors[labelId];
+        if (colorInfo) {
           colorCode = colorInfo.color || '#333333';
           colorName = colorInfo.var_name || 'black';
         }
@@ -519,8 +565,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       const option = e.target.closest('.status-option');
       if (!option) return;
       
-      selectedValue = option.dataset.value;
+      selectedValue = option.dataset.value; // This is the label TEXT
+      selectedLabelId = option.dataset.labelId;
       const colorCode = option.dataset.colorCode;
+      
+      console.log(`Selected label: "${selectedValue}" (ID: ${selectedLabelId})`);
       
       // Update display
       if (selectedValue === '') {
@@ -653,23 +702,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     const columnValues = {};
     const fields = document.querySelectorAll('.monday-field');
     
+    console.log('Collecting column values from', fields.length, 'fields');
+    
     fields.forEach(field => {
       const columnId = field.dataset.columnId;
       const columnType = field.dataset.columnType;
+      
+      console.log(`Processing field: ${columnId} (${columnType})`);
       
       // Handle custom status dropdown
       const customDropdown = field.querySelector('.custom-status-dropdown');
       if (customDropdown && customDropdown.getValue) {
         const value = customDropdown.getValue();
         if (value && value !== '') {
-          columnValues[columnId] = formatColumnValue(columnType, value, null);
+          const formatted = formatColumnValue(columnType, value, null);
+          if (formatted !== null) {
+            columnValues[columnId] = formatted;
+            console.log(`  ✓ Added status value:`, formatted);
+          }
         }
         return;
       }
       
       // Handle regular inputs
       const input = field.querySelector('.monday-field-input, .monday-field-checkbox');
-      if (!input) return;
+      if (!input) {
+        console.log('  ⚠️ No input found in field');
+        return;
+      }
       
       let value = input.value;
       
@@ -678,13 +738,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!input.checked) return;
         value = 'true';
       } else if (!value || value === '') {
+        console.log('  - Empty value, skipping');
         return;
       }
       
       // Format value based on column type
-      columnValues[columnId] = formatColumnValue(columnType, value, input);
+      const formatted = formatColumnValue(columnType, value, input);
+      if (formatted !== null) {
+        columnValues[columnId] = formatted;
+        console.log(`  ✓ Added value:`, formatted);
+      } else {
+        console.log('  - Formatted value is null, skipping');
+      }
     });
     
+    console.log('Final column values:', columnValues);
     return columnValues;
   }
 
@@ -767,7 +835,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         createBugState: {
           title: document.getElementById('title').value,
           platform: document.getElementById('platform').value,
-          env: document.getElementById('env').value,
           version: document.getElementById('version').value,
           description: document.getElementById('description').value,
           stepsToReproduce: document.getElementById('stepsToReproduce').value,
@@ -1006,7 +1073,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       const bugData = {
         title: title,
         platform: document.getElementById('platform').value,
-        env: document.getElementById('env').value,
         version: document.getElementById('version').value,
         description: description,
         stepsToReproduce: stepsToReproduce,
