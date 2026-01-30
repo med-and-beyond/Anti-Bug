@@ -226,9 +226,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       bugItem.appendChild(meta);
       
       bugItem.addEventListener('click', () => {
-        // Open Monday item in new tab (construct URL)
-        const mondayUrl = `https://monday.com/boards/${bug.board_id}/pulses/${bug.id}`;
-        chrome.tabs.create({ url: mondayUrl });
+        // Open Monday item in new tab using the URL from the API
+        chrome.tabs.create({ url: bug.url });
       });
       
       bugsList.appendChild(bugItem);

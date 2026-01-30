@@ -180,6 +180,7 @@ export class MondayAPI {
               items {
                 id
                 name
+                url
                 created_at
                 updated_at
                 column_values {
