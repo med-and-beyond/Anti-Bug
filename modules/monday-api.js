@@ -187,6 +187,11 @@ export class MondayAPI {
                   id
                   text
                   value
+                  column {
+                    title
+                    type
+                    settings_str
+                  }
                 }
               }
             }

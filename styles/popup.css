@@ -221,12 +221,13 @@ body {
 .bug-status {
   display: inline-block;
   padding: 2px 8px;
-  background: #f1f8ff;
-  border: 1px solid #c8e1ff;
   border-radius: 12px;
   font-size: 11px;
   font-weight: 500;
-  color: #0366d6;
+  /* Default styling - will be overridden by inline styles when color data is available */
+  background: #c4c4c4;
+  border: 1px solid #b0b0b0;
+  color: #333;
 }
 
 .bug-date {
