@@ -169,14 +169,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       const term = searchTerm.toLowerCase();
       filteredBugs = allBugs.filter(bug => {
         const title = bug.name ? bug.name.toLowerCase() : '';
-        // Find status column by title (case-insensitive) or by type "color"
         const statusColumn = bug.column_values?.find(col => 
           col.column?.title?.toLowerCase() === 'status' || 
           (col.column?.type === 'color' && col.column?.title?.toLowerCase().includes('status'))
         );
         const status = (statusColumn && statusColumn.text) ? statusColumn.text.toLowerCase() : '';
         const date = new Date(bug.created_at).toLocaleDateString().toLowerCase();
-        
         return title.includes(term) || status.includes(term) || date.includes(term);
       });
     }
@@ -275,12 +273,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (statusIndex === undefined || statusIndex === null) {
         return null;
       }
-
-      // Parse the column settings to get the color mapping
       const settings = JSON.parse(statusColumn.column.settings_str);
       const labelsColors = settings.labels_colors || {};
-      
-      // Look up the color for this status index
       const colorInfo = labelsColors[statusIndex.toString()];
       
       if (!colorInfo || !colorInfo.color) {
@@ -310,7 +304,6 @@ document.addEventListener('DOMContentLoaded', async () => {
    * @returns {string} - "#333" for dark text or "#fff" for light text
    */
   function getContrastTextColor(hexColor) {
-    // Remove # if present
     const hex = hexColor.replace('#', '');
     
     // Parse RGB values
