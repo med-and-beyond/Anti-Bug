@@ -440,6 +440,184 @@ export class MondayAPI {
     return item;
   }
 
+  async fetchMe() {
+    const query = `
+      query {
+        me {
+          id
+          name
+          email
+        }
+      }
+    `;
+    const data = await this.query(query);
+    return data.me;
+  }
+
+  async findItemByName(boardId, groupId, name) {
+    /**
+     * Search for items in a board/group whose name contains the given text.
+     * Returns an array of up to 10 matching items with id, name, url, and column_values.
+     * NOTE: compare_value is Monday's custom CompareValue scalar, so we inline it
+     * (safely JSON-escaped) rather than passing it as a typed variable.
+     */
+    console.log(`Searching for item "${name}" in board ${boardId}, group ${groupId}`);
+
+    const escapedName = JSON.stringify(name);
+
+    const query = `
+      query ($boardId: [ID!]!, $groupId: [String]) {
+        boards(ids: $boardId) {
+          groups(ids: $groupId) {
+            items_page(
+              limit: 10,
+              query_params: {
+                rules: [{column_id: "name", compare_value: [${escapedName}], operator: contains_terms}]
+              }
+            ) {
+              items {
+                id
+                name
+                url
+                column_values {
+                  id
+                  text
+                  value
+                  column {
+                    title
+                    type
+                    settings_str
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const data = await this.query(query, {
+      boardId: [boardId],
+      groupId: [groupId]
+    });
+
+    if (data.boards && data.boards[0] && data.boards[0].groups && data.boards[0].groups[0]) {
+      const items = data.boards[0].groups[0].items_page.items || [];
+      console.log(`Found ${items.length} matching item(s)`);
+      return items;
+    }
+
+    return [];
+  }
+
+  async fetchBoardTags(boardId, columnTitle = 'Tags Tech Support') {
+    /**
+     * Fetch tags/labels for the tag-like column on a given board, scoped to
+     * THAT board only (never falling back to account-wide tags, to avoid
+     * polluting the list with tags from other boards).
+     *
+     * Monday has two column types that look like tags in the UI:
+     *   - type "tag"/"tags": real tags, available via boards.tags
+     *   - type "dropdown":   labels defined per-column in settings_str.labels
+     *
+     * Returns { tags: [{id, name, color}], columnType, columnId }.
+     */
+    console.log(`Fetching tags for board ${boardId}, column "${columnTitle}"`);
+
+    const query = `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          tags {
+            id
+            name
+            color
+          }
+          columns {
+            id
+            title
+            type
+            settings_str
+          }
+        }
+      }
+    `;
+
+    const data = await this.query(query, { boardId: [boardId] });
+    const board = data?.boards?.[0];
+    if (!board) return { tags: [], columnType: null, columnId: null };
+
+    const columns = Array.isArray(board.columns) ? board.columns : [];
+    const target = columns.find(c =>
+      (c.title || '').toLowerCase() === columnTitle.toLowerCase()
+    );
+
+    if (!target) {
+      console.warn(`Column "${columnTitle}" not found on board`);
+      return { tags: [], columnType: null, columnId: null };
+    }
+
+    console.log(`Column "${columnTitle}": type=${target.type}, id=${target.id}`);
+
+    // Dropdown column → labels are defined in settings_str
+    if (target.type === 'dropdown') {
+      let settings = {};
+      try {
+        settings = JSON.parse(target.settings_str || '{}');
+      } catch (e) {
+        console.warn('Failed to parse dropdown settings:', e);
+      }
+
+      const rawLabels = Array.isArray(settings.labels)
+        ? settings.labels
+        : (settings.labels && typeof settings.labels === 'object'
+            ? Object.entries(settings.labels).map(([id, name]) => ({ id, name }))
+            : []);
+
+      // Deactivated labels are listed in settings.deactivated_labels or similar.
+      // We keep all labels by default since active status isn't always available.
+      const tags = rawLabels.map(l => ({
+        id: l.id,
+        name: l.name || '',
+        color: l.color || null
+      })).filter(t => t.name);
+
+      tags.sort((a, b) => a.name.localeCompare(b.name));
+      console.log(`Returning ${tags.length} dropdown label(s) for this board`);
+      return { tags, columnType: 'dropdown', columnId: target.id };
+    }
+
+    // Tag column → use boards.tags (scoped to this board)
+    if (target.type === 'tag' || target.type === 'tags') {
+      const boardTags = Array.isArray(board.tags) ? board.tags : [];
+      boardTags.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      console.log(`Returning ${boardTags.length} board-scoped tag(s)`);
+      return { tags: boardTags, columnType: target.type, columnId: target.id };
+    }
+
+    console.warn(`Column "${columnTitle}" has unsupported type "${target.type}"`);
+    return { tags: [], columnType: target.type, columnId: target.id };
+  }
+
+  async addUpdateToItem(itemId, body) {
+    const mutation = `
+      mutation ($itemId: ID!, $body: String!) {
+        create_update(
+          item_id: $itemId,
+          body: $body
+        ) {
+          id
+        }
+      }
+    `;
+
+    const data = await this.query(mutation, {
+      itemId: itemId,
+      body: body
+    });
+
+    return data.create_update;
+  }
+
   async addBugDetailsUpdate(itemId, bugData) {
     // Format bug details with clean formatting (Monday.com doesn't support markdown)
     let updateText = '🐛 BUG REPORT\n\n';

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Update Bug Case</title>
+  <link rel="stylesheet" href="styles/update-bug.css">
+</head>
+<body>
+  <div class="modal-container">
+    <div class="modal-header">
+      <div class="header-left">
+        <img src="icons/icon128.png" alt="Anti Bugs" class="header-logo">
+        <h2>Update Bug Case</h2>
+      </div>
+      <button class="close-btn" id="closeBtn">&times;</button>
+    </div>
+
+    <div class="modal-body">
+      <!-- Left Column: Update Form -->
+      <div class="form-column">
+        <form id="updateForm">
+          <!-- Board Selection -->
+          <div class="form-group">
+            <label for="boardSelect">Monday Board:</label>
+            <select id="boardSelect" name="boardSelect">
+              <option value="">Loading boards...</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="groupSelect">Group:</label>
+            <select id="groupSelect" name="groupSelect">
+              <option value="">Select board first</option>
+            </select>
+          </div>
+
+          <!-- Item Lookup -->
+          <div class="form-group">
+            <label for="itemNameInput">Item Name / Number: *</label>
+            <div class="lookup-row">
+              <input type="text" id="itemNameInput" name="itemNameInput" placeholder="e.g., 00583300" autocomplete="off">
+              <button type="button" class="find-btn" id="findBtn" disabled>Find</button>
+            </div>
+            <div class="lookup-status" id="lookupStatus"></div>
+            <div class="lookup-candidates" id="lookupCandidates" style="display: none;"></div>
+          </div>
+
+          <!-- Update Fields (hidden until item found) -->
+          <div class="update-fields-section" id="updateFieldsSection" style="display: none;">
+            <div class="form-group">
+              <label for="problemDescription">Short description of the problem: *</label>
+              <textarea id="problemDescription" name="problemDescription" rows="3" required placeholder="Brief description of the problem"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="expectedBehavior">What is expected: *</label>
+              <textarea id="expectedBehavior" name="expectedBehavior" rows="3" required placeholder="What should happen"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="checksPerformed">Checks Performed:</label>
+              <textarea id="checksPerformed" name="checksPerformed" rows="3" placeholder="e.g. logs, LogRocket, DB, user settings, permissions, replication"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="actionTaken">Action Taken: *</label>
+              <textarea id="actionTaken" name="actionTaken" rows="3" required placeholder="What was done to resolve / investigate"></textarea>
+            </div>
+
+            <!-- Tech Support Owner -->
+            <div class="form-group owner-row">
+              <label>Tech support owner:</label>
+              <div class="owner-display" id="ownerDisplay">
+                <span class="owner-badge" id="ownerBadge">Loading...</span>
+              </div>
+            </div>
+
+            <!-- Tags Tech Support -->
+            <div class="form-group">
+              <label for="tagInput">Tags Tech Support:</label>
+              <div class="tags-container" id="tagsContainer">
+                <div class="current-tags" id="currentTags"></div>
+                <div class="tag-input-row">
+                  <input type="text" id="tagInput" placeholder="Start typing to search existing tags..." autocomplete="off" disabled>
+                  <div class="tag-suggestions" id="tagSuggestions" style="display: none;"></div>
+                </div>
+                <div class="tags-hint">Select from existing tags. New tags must be added via the Monday board.</div>
+              </div>
+            </div>
+
+            <!-- Resolution Status -->
+            <div class="form-group">
+              <label for="resolutionStatusSelect">Resolution status:</label>
+              <select id="resolutionStatusSelect" name="resolutionStatusSelect">
+                <option value="">-- Leave unchanged --</option>
+                <option value="Resolved">Resolved</option>
+                <option value="Not a bug">Not a bug</option>
+              </select>
+            </div>
+
+            <div class="form-group conditional-field" id="notABugGroup" style="display: none;">
+              <label for="notABugExplanation">Why this is expected behavior: *</label>
+              <textarea id="notABugExplanation" name="notABugExplanation" rows="3" placeholder="Explain why this is expected behavior"></textarea>
+            </div>
+
+            <!-- Status -->
+            <div class="form-group">
+              <label for="statusSelect">Status:</label>
+              <select id="statusSelect" name="statusSelect">
+                <option value="">-- Leave unchanged --</option>
+                <option value="Pending TechSupport">Pending TechSupport</option>
+                <option value="Pending dev">Pending dev (escalation)</option>
+                <option value="Pending CS">Pending CS (escalation)</option>
+                <option value="Pending code fix">Pending code fix (escalation)</option>
+                <option value="Pending Data">Pending Data (escalation)</option>
+                <option value="Waiting for Product">Waiting for Product (escalation)</option>
+                <option value="Move to Finance">Move to Finance (escalation)</option>
+              </select>
+            </div>
+
+            <div class="form-group conditional-field" id="escalationGroup" style="display: none;">
+              <label for="escalationReason">Why escalation is needed: *</label>
+              <textarea id="escalationReason" name="escalationReason" rows="3" placeholder="Explain why this needs to be escalated"></textarea>
+            </div>
+
+            <!-- Additional Notes -->
+            <div class="form-group">
+              <label for="additionalNotes">Additional Notes:</label>
+              <textarea id="additionalNotes" name="additionalNotes" rows="3" placeholder="Any useful context for the next handler (optional)"></textarea>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- Right Column: Attachments -->
+      <div class="attachments-column">
+        <h3>Attachments</h3>
+
+        <div class="attachment-section">
+          <h4>Additional Files</h4>
+          <div class="drop-zone" id="dropZone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M21 15V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M17 8L12 3L7 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M12 3V15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <p>Drag &amp; drop files here</p>
+            <p class="or-text">or</p>
+            <button type="button" class="browse-btn" id="browseBtn">Browse Files</button>
+            <p class="paste-hint">Tip: You can also paste (Ctrl+V / Cmd+V) images or files directly</p>
+            <input type="file" id="fileInput" multiple hidden>
+          </div>
+          <div class="files-list" id="filesList">
+            <!-- Uploaded files will appear here -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal Footer -->
+    <div class="modal-footer">
+      <div class="upload-progress" id="uploadProgress" style="display: none;">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <span class="progress-text" id="progressText">Updating...</span>
+      </div>
+      <div class="error-banner" id="errorBanner" style="display: none;">
+        <span class="error-icon">!</span>
+        <span class="error-text" id="errorText"></span>
+        <button class="error-close" id="errorClose">×</button>
+      </div>
+      <div class="success-banner" id="successBanner" style="display: none;">
+        <span class="success-icon">&#10003;</span>
+        <span class="success-text" id="successText"></span>
+        <a class="success-link" id="successLink" href="#" target="_blank" rel="noopener" style="display: none;">Open in Monday</a>
+        <button class="success-close" id="successClose" type="button">&times;</button>
+      </div>
+      <div class="footer-buttons">
+        <button type="button" class="cancel-btn" id="cancelBtn">Cancel</button>
+        <button type="submit" class="submit-btn" id="submitBtn" form="updateForm" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span id="submitBtnText">Update Case</span>
+          <span class="spinner" id="submitSpinner" style="display: none;"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="scripts/update-bug.js" type="module"></script>
+</body>
+</html>
