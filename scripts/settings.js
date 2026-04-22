@@ -4,6 +4,15 @@
 let allBoards = [];
 let filteredBoards = [];
 
+// In-memory saved configurations state (mirrors chrome.storage.sync)
+let savedConfigurations = [];
+let defaultConfigurationId = null;
+
+// Build a stable id from board + group ids
+function buildConfigId(boardId, groupId) {
+  return `${boardId}:${groupId}`;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Easter Egg: Click logo 17 times to open random Oggy video
   const logoImg = document.querySelector('.header-logo');
@@ -56,7 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('saveTokenBtn').addEventListener('click', saveToken);
   document.getElementById('disconnectBtn').addEventListener('click', disconnect);
   document.getElementById('boardSelect').addEventListener('change', loadGroups);
-  document.getElementById('saveSelectionBtn').addEventListener('click', saveSelection);
+  document.getElementById('addConfigurationBtn').addEventListener('click', addConfiguration);
   document.getElementById('saveConsentBtn').addEventListener('click', saveConsent);
   document.getElementById('clearDataBtn').addEventListener('click', clearData);
   
@@ -91,6 +100,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         'mondayToken',
         'selectedBoardId',
         'selectedGroupId',
+        'savedConfigurations',
+        'defaultConfigurationId',
         'screenshotConsent'
       ]);
 
@@ -104,18 +115,51 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Consent
       document.getElementById('screenshotConsent').checked = settings.screenshotConsent !== false;
 
-      // Board/Group selection
-      if (settings.selectedBoardId) {
-        document.getElementById('boardSelect').value = settings.selectedBoardId;
-        await loadGroups();
-        
-        if (settings.selectedGroupId) {
-          document.getElementById('groupSelect').value = settings.selectedGroupId;
+      // Saved configurations state (with one-time migration from legacy single selection)
+      savedConfigurations = Array.isArray(settings.savedConfigurations)
+        ? settings.savedConfigurations
+        : [];
+      defaultConfigurationId = settings.defaultConfigurationId || null;
+
+      if (savedConfigurations.length === 0 && settings.selectedBoardId && settings.selectedGroupId) {
+        const migrated = await migrateLegacySelection(
+          settings.selectedBoardId,
+          settings.selectedGroupId
+        );
+        if (migrated) {
+          savedConfigurations = [migrated];
+          defaultConfigurationId = migrated.id;
+          await persistConfigurations();
         }
       }
+
+      renderSavedConfigurations();
     } catch (error) {
       console.error('Error loading settings:', error);
     }
+  }
+
+  // Build a configuration entry from the legacy single selection using already-loaded board data.
+  // Returns null if the board or group can't be resolved (e.g., no longer accessible).
+  async function migrateLegacySelection(boardId, groupId) {
+    const board = allBoards.find(b => String(b.id) === String(boardId));
+    if (!board) {
+      console.warn('Migration skipped: board no longer accessible', boardId);
+      return null;
+    }
+    const group = (board.groups || []).find(g => String(g.id) === String(groupId));
+    if (!group) {
+      console.warn('Migration skipped: group no longer in board', boardId, groupId);
+      return null;
+    }
+    return {
+      id: buildConfigId(board.id, group.id),
+      boardId: String(board.id),
+      boardName: board.name,
+      groupId: String(group.id),
+      groupTitle: group.title,
+      workspaceName: board.workspace?.name || 'No Workspace'
+    };
   }
 
   function toggleTokenVisibility() {
@@ -186,13 +230,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       await chrome.storage.sync.remove([
         'mondayToken',
         'selectedBoardId',
-        'selectedGroupId'
+        'selectedGroupId',
+        'savedConfigurations',
+        'defaultConfigurationId'
       ]);
-      
+      await chrome.storage.local.remove(['activePopupConfigId']);
+
+      savedConfigurations = [];
+      defaultConfigurationId = null;
+
       document.getElementById('mondayToken').value = '';
       document.getElementById('boardSelect').innerHTML = '<option value="">Select a board...</option>';
       document.getElementById('groupSelect').innerHTML = '<option value="">Select board first</option>';
-      
+      renderSavedConfigurations();
+
       updateConnectionStatus(false);
       alert('Disconnected successfully');
     } catch (error) {
@@ -236,14 +287,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // Update count
         updateBoardCount(filteredBoards.length, allBoards.length);
-        
-        // Restore saved selection
-        const settings = await chrome.storage.sync.get(['selectedBoardId']);
-        if (settings.selectedBoardId) {
-          boardSelect.value = settings.selectedBoardId;
-          await loadGroups();
-        }
-        
+
         boardSelect.disabled = false;
         boardSelectStatus.classList.remove('loading');
       } else {
@@ -333,14 +377,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const boardSelect = document.getElementById('boardSelect');
     const groupSelect = document.getElementById('groupSelect');
     const selectedOption = boardSelect.options[boardSelect.selectedIndex];
-    
+
     if (!selectedOption || !selectedOption.dataset.groups) {
       groupSelect.innerHTML = '<option value="">Select board first</option>';
       return;
     }
 
     const groups = JSON.parse(selectedOption.dataset.groups);
-    
+
     groupSelect.innerHTML = '<option value="">Select a group...</option>';
     groups.forEach(group => {
       const option = document.createElement('option');
@@ -348,33 +392,192 @@ document.addEventListener('DOMContentLoaded', async () => {
       option.textContent = group.title;
       groupSelect.appendChild(option);
     });
-
-    // Restore saved selection
-    const settings = await chrome.storage.sync.get(['selectedGroupId']);
-    if (settings.selectedGroupId) {
-      groupSelect.value = settings.selectedGroupId;
-    }
   }
 
-  async function saveSelection() {
-    const boardId = document.getElementById('boardSelect').value;
-    const groupId = document.getElementById('groupSelect').value;
-    
+  async function addConfiguration() {
+    const boardSelect = document.getElementById('boardSelect');
+    const groupSelect = document.getElementById('groupSelect');
+    const boardId = boardSelect.value;
+    const groupId = groupSelect.value;
+
     if (!boardId || !groupId) {
       alert('Please select both board and group');
       return;
     }
 
-    try {
-      await chrome.storage.sync.set({
-        selectedBoardId: boardId,
-        selectedGroupId: groupId
-      });
-      
-      alert('Selection saved successfully');
-    } catch (error) {
-      alert('Failed to save selection: ' + error.message);
+    const id = buildConfigId(boardId, groupId);
+    if (savedConfigurations.some(cfg => cfg.id === id)) {
+      alert('This board and group combination is already saved.');
+      return;
     }
+
+    const board = allBoards.find(b => String(b.id) === String(boardId));
+    const group = board ? (board.groups || []).find(g => String(g.id) === String(groupId)) : null;
+
+    if (!board || !group) {
+      alert('Could not resolve board or group details. Please try again.');
+      return;
+    }
+
+    const configuration = {
+      id,
+      boardId: String(board.id),
+      boardName: board.name,
+      groupId: String(group.id),
+      groupTitle: group.title,
+      workspaceName: board.workspace?.name || 'No Workspace'
+    };
+
+    savedConfigurations.push(configuration);
+    if (!defaultConfigurationId) {
+      defaultConfigurationId = configuration.id;
+    }
+
+    try {
+      await persistConfigurations();
+      renderSavedConfigurations();
+
+      // Reset the form selections so the next add starts cleanly
+      boardSelect.value = '';
+      groupSelect.innerHTML = '<option value="">Select board first</option>';
+    } catch (error) {
+      // Roll back the in-memory change if persistence fails
+      savedConfigurations = savedConfigurations.filter(c => c.id !== configuration.id);
+      if (defaultConfigurationId === configuration.id) {
+        defaultConfigurationId = savedConfigurations[0]?.id || null;
+      }
+      alert('Failed to add configuration: ' + error.message);
+    }
+  }
+
+  async function setDefaultConfiguration(id) {
+    if (!savedConfigurations.some(cfg => cfg.id === id)) return;
+    const previousDefault = defaultConfigurationId;
+    defaultConfigurationId = id;
+    try {
+      await persistConfigurations();
+      renderSavedConfigurations();
+    } catch (error) {
+      defaultConfigurationId = previousDefault;
+      alert('Failed to set default: ' + error.message);
+    }
+  }
+
+  async function removeConfiguration(id) {
+    const index = savedConfigurations.findIndex(cfg => cfg.id === id);
+    if (index === -1) return;
+
+    const removed = savedConfigurations[index];
+    const confirmMessage = `Remove "${removed.boardName} / ${removed.groupTitle}" from your bug lists?`;
+    if (!confirm(confirmMessage)) return;
+
+    const snapshot = {
+      configs: savedConfigurations.slice(),
+      defaultId: defaultConfigurationId
+    };
+
+    savedConfigurations.splice(index, 1);
+    if (defaultConfigurationId === id) {
+      defaultConfigurationId = savedConfigurations[0]?.id || null;
+    }
+
+    try {
+      await persistConfigurations();
+
+      // If the popup was showing the removed configuration, clear that pointer
+      const local = await chrome.storage.local.get(['activePopupConfigId']);
+      if (local.activePopupConfigId === id) {
+        await chrome.storage.local.remove(['activePopupConfigId']);
+      }
+
+      renderSavedConfigurations();
+    } catch (error) {
+      savedConfigurations = snapshot.configs;
+      defaultConfigurationId = snapshot.defaultId;
+      alert('Failed to remove configuration: ' + error.message);
+    }
+  }
+
+  // Persist savedConfigurations + defaultConfigurationId, and keep legacy
+  // selectedBoardId/selectedGroupId in sync with the default so Create Bug /
+  // Update Bug Case continue to work unchanged.
+  async function persistConfigurations() {
+    const payload = {
+      savedConfigurations,
+      defaultConfigurationId
+    };
+
+    const defaultConfig = savedConfigurations.find(cfg => cfg.id === defaultConfigurationId);
+    if (defaultConfig) {
+      payload.selectedBoardId = defaultConfig.boardId;
+      payload.selectedGroupId = defaultConfig.groupId;
+      await chrome.storage.sync.set(payload);
+    } else {
+      await chrome.storage.sync.set(payload);
+      await chrome.storage.sync.remove(['selectedBoardId', 'selectedGroupId']);
+    }
+  }
+
+  function renderSavedConfigurations() {
+    const container = document.getElementById('savedConfigurations');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (savedConfigurations.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state-inline';
+      empty.textContent = 'No configurations saved yet. Add your first one below.';
+      container.appendChild(empty);
+      return;
+    }
+
+    savedConfigurations.forEach(cfg => {
+      const row = document.createElement('div');
+      row.className = 'config-row' + (cfg.id === defaultConfigurationId ? ' is-default' : '');
+
+      const main = document.createElement('div');
+      main.className = 'config-row-main';
+
+      const title = document.createElement('div');
+      title.className = 'config-row-title';
+      title.textContent = `${cfg.boardName} / ${cfg.groupTitle}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'config-row-meta';
+      meta.textContent = cfg.workspaceName || 'No Workspace';
+
+      main.appendChild(title);
+      main.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'config-row-actions';
+
+      if (cfg.id === defaultConfigurationId) {
+        const badge = document.createElement('span');
+        badge.className = 'config-badge';
+        badge.textContent = 'Default';
+        actions.appendChild(badge);
+      } else {
+        const setDefaultBtn = document.createElement('button');
+        setDefaultBtn.type = 'button';
+        setDefaultBtn.className = 'config-action-btn';
+        setDefaultBtn.textContent = 'Set as default';
+        setDefaultBtn.addEventListener('click', () => setDefaultConfiguration(cfg.id));
+        actions.appendChild(setDefaultBtn);
+      }
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'config-action-btn remove-btn';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', () => removeConfiguration(cfg.id));
+      actions.appendChild(removeBtn);
+
+      row.appendChild(main);
+      row.appendChild(actions);
+      container.appendChild(row);
+    });
   }
 
   async function saveConsent() {

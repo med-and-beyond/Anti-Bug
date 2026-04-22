@@ -117,6 +117,46 @@ body {
   }
 }
 
+/* Config Switcher */
+.config-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: white;
+  border-bottom: 1px solid #e1e4e8;
+}
+
+.config-switcher[hidden] {
+  display: none;
+}
+
+.config-switcher-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6a737d;
+  flex-shrink: 0;
+}
+
+.config-switcher-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid #d1d5da;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.config-switcher-select:focus {
+  outline: none;
+  border-color: #EB8634;
+  box-shadow: 0 0 0 3px rgba(235, 134, 52, 0.1);
+}
+
 /* Search Container */
 .search-container {
   position: relative;

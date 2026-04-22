@@ -369,8 +369,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     lookupCandidates.style.display = 'none';
     lookupCandidates.innerHTML = '';
 
-    // Persist selection
-    chrome.storage.sync.set({ selectedBoardId: boardId, selectedGroupId: groupId });
+    // Do NOT persist the selection here — the default configuration is managed
+    // from the Settings page (Bug Lists). Ad-hoc board/group changes on this
+    // page are one-off for the current lookup.
 
     chrome.runtime.sendMessage(
       { action: 'findItemByName', boardId, groupId, name },
