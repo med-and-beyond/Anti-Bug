@@ -24,7 +24,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const cancelBtn = document.getElementById('cancelBtn');
   const submitBtn = document.getElementById('submitBtn');
   const boardSelect = document.getElementById('boardSelect');
-  const groupSelect = document.getElementById('groupSelect');
   const itemNameInput = document.getElementById('itemNameInput');
   const findBtn = document.getElementById('findBtn');
   const lookupStatus = document.getElementById('lookupStatus');
@@ -97,13 +96,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     await submitUpdate();
   });
 
-  // Enable/disable Find button based on board + group + input
+  // Enable/disable Find button based on board + input
   function refreshFindBtnState() {
-    findBtn.disabled = !(boardSelect.value && groupSelect.value && itemNameInput.value.trim());
+    findBtn.disabled = !(boardSelect.value && itemNameInput.value.trim());
   }
 
-  boardSelect.addEventListener('change', async () => {
-    await loadGroups();
+  boardSelect.addEventListener('change', () => {
     clearFoundItem();
     // Reset tag caches/state when changing boards
     boardTags = [];
@@ -111,13 +109,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectedTagIds.clear();
     selectedTagMap.clear();
     refreshFindBtnState();
-    // Preload board tags in the background
-    if (boardSelect.value) loadBoardTags(boardSelect.value);
-  });
-
-  groupSelect.addEventListener('change', () => {
-    clearFoundItem();
-    refreshFindBtnState();
+    // Persist selection and preload board tags in the background
+    if (boardSelect.value) {
+      chrome.storage.sync.set({ selectedBoardId: boardSelect.value });
+      loadBoardTags(boardSelect.value);
+    }
   });
 
   itemNameInput.addEventListener('input', () => {
@@ -264,7 +260,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const option = document.createElement('option');
                 option.value = board.id;
                 option.textContent = board.name;
-                option.dataset.groups = JSON.stringify(board.groups);
                 optgroup.appendChild(option);
               });
               boardSelect.appendChild(optgroup);
@@ -273,7 +268,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             const saved = await chrome.storage.sync.get(['selectedBoardId']);
             if (saved.selectedBoardId) {
               boardSelect.value = saved.selectedBoardId;
-              await loadGroups();
               // Preload board tags for the persisted board
               loadBoardTags(saved.selectedBoardId);
             }
@@ -291,29 +285,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       boardSelect.innerHTML = '<option value="">Error loading boards</option>';
       boardSelect.disabled = false;
     }
-  }
-
-  async function loadGroups() {
-    const selectedOption = boardSelect.options[boardSelect.selectedIndex];
-    if (!selectedOption || !selectedOption.dataset.groups) {
-      groupSelect.innerHTML = '<option value="">Select board first</option>';
-      return;
-    }
-
-    const groups = JSON.parse(selectedOption.dataset.groups);
-    groupSelect.innerHTML = '<option value="">Select a group</option>';
-    groups.forEach(group => {
-      const option = document.createElement('option');
-      option.value = group.id;
-      option.textContent = group.title;
-      groupSelect.appendChild(option);
-    });
-
-    const saved = await chrome.storage.sync.get(['selectedGroupId']);
-    if (saved.selectedGroupId && groups.find(g => g.id === saved.selectedGroupId)) {
-      groupSelect.value = saved.selectedGroupId;
-    }
-    refreshFindBtnState();
   }
 
   async function loadCurrentUser() {
@@ -357,23 +328,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!name) return;
 
     const boardId = boardSelect.value;
-    const groupId = groupSelect.value;
-    if (!boardId || !groupId) {
+    if (!boardId) {
       lookupStatus.className = 'lookup-status error';
-      lookupStatus.textContent = 'Please select a board and group first.';
+      lookupStatus.textContent = 'Please select a board first.';
       return;
     }
 
     lookupStatus.className = 'lookup-status info';
-    lookupStatus.textContent = 'Searching...';
+    lookupStatus.textContent = 'Searching entire board...';
     lookupCandidates.style.display = 'none';
     lookupCandidates.innerHTML = '';
 
-    // Persist selection
-    chrome.storage.sync.set({ selectedBoardId: boardId, selectedGroupId: groupId });
+    chrome.storage.sync.set({ selectedBoardId: boardId });
 
     chrome.runtime.sendMessage(
-      { action: 'findItemByName', boardId, groupId, name },
+      { action: 'findItemByName', boardId, name },
       (response) => {
         if (chrome.runtime.lastError) {
           lookupStatus.className = 'lookup-status error';
@@ -389,7 +358,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = response.items || [];
         if (items.length === 0) {
           lookupStatus.className = 'lookup-status error';
-          lookupStatus.textContent = `No item matching "${name}" found in the selected group.`;
+          lookupStatus.textContent = `No item matching "${name}" found on this board.`;
           return;
         }
 
@@ -417,7 +386,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           nameEl.textContent = item.name;
           const meta = document.createElement('div');
           meta.className = 'cand-meta';
-          meta.textContent = `ID: ${item.id}`;
+          const groupTitle = item.group?.title;
+          meta.textContent = groupTitle
+            ? `Group: ${groupTitle} · ID: ${item.id}`
+            : `ID: ${item.id}`;
           div.appendChild(nameEl);
           div.appendChild(meta);
           div.addEventListener('click', () => selectItem(item));

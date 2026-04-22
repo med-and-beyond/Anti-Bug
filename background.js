@@ -414,7 +414,7 @@ async function handleGetMe(message, sendResponse) {
 }
 
 async function handleFindItemByName(message, sendResponse) {
-  const { boardId, groupId, name } = message;
+  const { boardId, name } = message;
 
   try {
     const settings = await chrome.storage.sync.get(['mondayToken']);
@@ -422,8 +422,8 @@ async function handleFindItemByName(message, sendResponse) {
       sendResponse({ success: false, error: 'Monday.com not connected' });
       return;
     }
-    if (!boardId || !groupId) {
-      sendResponse({ success: false, error: 'Board and group are required' });
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
       return;
     }
     if (!name || !name.trim()) {
@@ -432,7 +432,7 @@ async function handleFindItemByName(message, sendResponse) {
     }
 
     mondayAPI.setToken(settings.mondayToken);
-    const items = await mondayAPI.findItemByName(boardId, groupId, name.trim());
+    const items = await mondayAPI.findItemByName(boardId, name.trim());
     sendResponse({ success: true, items });
   } catch (error) {
     console.error('findItemByName failed:', error);

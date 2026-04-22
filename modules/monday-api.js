@@ -454,40 +454,42 @@ export class MondayAPI {
     return data.me;
   }
 
-  async findItemByName(boardId, groupId, name) {
+  async findItemByName(boardId, name) {
     /**
-     * Search for items in a board/group whose name contains the given text.
-     * Returns an array of up to 10 matching items with id, name, url, and column_values.
+     * Search for items across the entire board whose name contains the given text.
+     * Returns an array of up to 25 matching items with id, name, url, group, and column_values.
      * NOTE: compare_value is Monday's custom CompareValue scalar, so we inline it
      * (safely JSON-escaped) rather than passing it as a typed variable.
      */
-    console.log(`Searching for item "${name}" in board ${boardId}, group ${groupId}`);
+    console.log(`Searching for item "${name}" in board ${boardId}`);
 
     const escapedName = JSON.stringify(name);
 
     const query = `
-      query ($boardId: [ID!]!, $groupId: [String]) {
+      query ($boardId: [ID!]!) {
         boards(ids: $boardId) {
-          groups(ids: $groupId) {
-            items_page(
-              limit: 10,
-              query_params: {
-                rules: [{column_id: "name", compare_value: [${escapedName}], operator: contains_terms}]
-              }
-            ) {
-              items {
+          items_page(
+            limit: 25,
+            query_params: {
+              rules: [{column_id: "name", compare_value: [${escapedName}], operator: contains_terms}]
+            }
+          ) {
+            items {
+              id
+              name
+              url
+              group {
                 id
-                name
-                url
-                column_values {
-                  id
-                  text
-                  value
-                  column {
-                    title
-                    type
-                    settings_str
-                  }
+                title
+              }
+              column_values {
+                id
+                text
+                value
+                column {
+                  title
+                  type
+                  settings_str
                 }
               }
             }
@@ -497,12 +499,11 @@ export class MondayAPI {
     `;
 
     const data = await this.query(query, {
-      boardId: [boardId],
-      groupId: [groupId]
+      boardId: [boardId]
     });
 
-    if (data.boards && data.boards[0] && data.boards[0].groups && data.boards[0].groups[0]) {
-      const items = data.boards[0].groups[0].items_page.items || [];
+    if (data.boards && data.boards[0] && data.boards[0].items_page) {
+      const items = data.boards[0].items_page.items || [];
       console.log(`Found ${items.length} matching item(s)`);
       return items;
     }
