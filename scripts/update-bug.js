@@ -684,40 +684,58 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ===== Submit =====
 
   function buildUpdateBody(fields) {
-    let body = 'TECH SUPPORT UPDATE\n\n';
+    // Monday's create_update body is HTML-formatted, so we render the same
+    // content with lightweight HTML for a clean, scannable update.
+    const escapeHtml = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+    const multiline = (s) => escapeHtml(s).replace(/\r?\n/g, '<br/>');
 
-    body += 'Problem:\n' + fields.problemDescription + '\n\n';
-    body += 'Expected:\n' + fields.expectedBehavior + '\n\n';
+    const block = (label, value) =>
+      `<p><b>${escapeHtml(label)}:</b><br/>${multiline(value)}</p>`;
+    const inline = (label, value) =>
+      `<p><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`;
+
+    const parts = [];
+    parts.push('<h3><b>Tech Support Update</b></h3>');
+    parts.push('<hr/>');
+
+    parts.push(block('Problem', fields.problemDescription));
+    parts.push(block('Expected', fields.expectedBehavior));
 
     if (fields.checksPerformed) {
-      body += 'Checks Performed:\n' + fields.checksPerformed + '\n\n';
+      parts.push(block('Checks Performed', fields.checksPerformed));
     }
 
-    body += 'Action Taken:\n' + fields.actionTaken + '\n';
+    parts.push(block('Action Taken', fields.actionTaken));
 
     if (fields.resolutionStatus) {
-      body += '\nResolution: ' + fields.resolutionStatus + '\n';
+      parts.push(inline('Resolution', fields.resolutionStatus));
       if (fields.resolutionStatus === 'Not a bug' && fields.notABugExplanation) {
-        body += 'Not-a-bug explanation:\n' + fields.notABugExplanation + '\n';
+        parts.push(block('Not-a-bug explanation', fields.notABugExplanation));
       }
     }
 
     if (fields.status) {
-      body += '\nStatus: ' + fields.status + '\n';
+      parts.push(inline('Status', fields.status));
       if (ESCALATION_STATUSES.has(fields.status) && fields.escalationReason) {
-        body += 'Escalation reason:\n' + fields.escalationReason + '\n';
+        parts.push(block('Escalation reason', fields.escalationReason));
       }
     }
 
     if (fields.additionalNotes) {
-      body += '\nAdditional Notes:\n' + fields.additionalNotes + '\n';
+      parts.push(block('Additional Notes', fields.additionalNotes));
     }
 
     if (currentUser?.name) {
-      body += '\n---\nUpdated by: ' + currentUser.name;
+      parts.push('<hr/>');
+      parts.push(`<p><i>Updated by: <b>${escapeHtml(currentUser.name)}</b></i></p>`);
     }
 
-    return body.trim();
+    return parts.join('');
   }
 
   async function submitUpdate() {
