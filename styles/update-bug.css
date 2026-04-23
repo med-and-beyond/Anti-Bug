@@ -251,6 +251,25 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Bug description panel (read-only, populated from board Description column) */
+.bug-description-display {
+  padding: 10px 12px;
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #24292e;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.bug-description-display.is-empty {
+  color: #6a737d;
+  font-style: italic;
+}
+
 /* Conditional fields fade */
 .conditional-field {
   animation: fadeIn 0.25s ease-in;

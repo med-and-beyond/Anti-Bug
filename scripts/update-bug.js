@@ -39,6 +39,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const tagSuggestions = document.getElementById('tagSuggestions');
   const currentTagsDiv = document.getElementById('currentTags');
   const ownerBadge = document.getElementById('ownerBadge');
+  const bugDescriptionGroup = document.getElementById('bugDescriptionGroup');
+  const bugDescriptionDisplay = document.getElementById('bugDescriptionDisplay');
 
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
@@ -319,6 +321,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     tagInput.disabled = true;
     tagInput.value = '';
     tagSuggestions.style.display = 'none';
+    bugDescriptionGroup.style.display = 'none';
+    bugDescriptionDisplay.textContent = '';
+    bugDescriptionDisplay.classList.remove('is-empty');
   }
 
   function findItem() {
@@ -427,6 +432,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateFieldsSection.style.display = 'block';
     submitBtn.disabled = false;
 
+    const descCol = findDescriptionColumn(item);
+    if (!descCol) {
+      bugDescriptionGroup.style.display = 'none';
+      bugDescriptionDisplay.textContent = '';
+      bugDescriptionDisplay.classList.remove('is-empty');
+      showError('This board has no "Description" column, so the bug case description cannot be displayed.');
+    } else {
+      const text = (descCol.text || '').trim();
+      bugDescriptionDisplay.textContent = text || '(No description provided)';
+      bugDescriptionDisplay.classList.toggle('is-empty', !text);
+      bugDescriptionGroup.style.display = 'block';
+    }
+
     // Make sure board tags are available; then render chips + enable input
     await loadBoardTags(boardSelect.value);
     tagInput.disabled = boardTags.length === 0;
@@ -452,6 +470,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       return [];
     }
+  }
+
+  function findDescriptionColumn(item) {
+    return (item.column_values || []).find(col =>
+      (col.column?.title || '').trim().toLowerCase() === 'description'
+    );
   }
 
   function extractTagNames(item) {
