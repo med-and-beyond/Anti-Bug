@@ -87,19 +87,17 @@
               </div>
             </div>
 
-            <!-- Resolution Status -->
+            <!-- Resolution Status (options populated from the board) -->
             <div class="form-group">
               <label for="resolutionStatusSelect">Resolution status:</label>
               <select id="resolutionStatusSelect" name="resolutionStatusSelect">
                 <option value="">-- Leave unchanged --</option>
-                <option value="Resolved">Resolved</option>
-                <option value="Not a bug">Not a bug</option>
               </select>
             </div>
 
-            <div class="form-group conditional-field" id="notABugGroup" style="display: none;">
-              <label for="notABugExplanation">Why this is expected behavior: *</label>
-              <textarea id="notABugExplanation" name="notABugExplanation" rows="3" placeholder="Explain why this is expected behavior"></textarea>
+            <div class="form-group conditional-field" id="resolutionExplanationGroup" style="display: none;">
+              <label for="resolutionExplanation" id="resolutionExplanationLabel">Explanation: *</label>
+              <textarea id="resolutionExplanation" name="resolutionExplanation" rows="3" placeholder=""></textarea>
             </div>
 
             <!-- Status -->

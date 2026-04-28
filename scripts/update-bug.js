@@ -5,6 +5,8 @@ let selectedItem = null; // { id, name, url, existingTagIds: [] }
 let currentUser = null; // { id, name, email }
 let boardTags = []; // all tags available on the current board: [{id, name, color}]
 let boardTagsForBoardId = null; // boardId that boardTags was fetched for
+let boardResolutionLabels = []; // active labels for the "Resolution status" column
+let boardResolutionLabelsForBoardId = null;
 const selectedTagIds = new Set(); // numeric tag IDs the user selected to ADD (on top of existing)
 const selectedTagMap = new Map(); // id -> { name, color } for rendering chips
 let activeSuggestionIndex = -1;
@@ -17,6 +19,30 @@ const ESCALATION_STATUSES = new Set([
   'Waiting for Product',
   'Move to Finance'
 ]);
+
+// Resolution-status values that should show an explanation textarea, with the
+// per-status label/placeholder/error/update-section copy. Anything not listed
+// here renders no explanation field. Keys are matched case-insensitively, so
+// minor casing differences in the board column don't break the mapping.
+const RESOLUTION_EXPLANATION_META = {
+  'not a bug': {
+    label: 'Why this is expected behavior',
+    placeholder: 'Explain why this is expected behavior',
+    error: 'Please explain why this is expected behavior.',
+    blockTitle: 'Not-a-bug explanation'
+  },
+  'stuck': {
+    label: 'What is blocking progress',
+    placeholder: 'Describe what is blocking progress on this ticket',
+    error: 'Please describe what is blocking progress on this ticket.',
+    blockTitle: 'Stuck reason'
+  }
+};
+
+function getResolutionExplanationMeta(statusValue) {
+  if (!statusValue) return null;
+  return RESOLUTION_EXPLANATION_META[statusValue.trim().toLowerCase()] || null;
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   const updateForm = document.getElementById('updateForm');
@@ -31,9 +57,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const updateFieldsSection = document.getElementById('updateFieldsSection');
   const resolutionStatusSelect = document.getElementById('resolutionStatusSelect');
   const statusSelect = document.getElementById('statusSelect');
-  const notABugGroup = document.getElementById('notABugGroup');
+  const resolutionExplanationGroup = document.getElementById('resolutionExplanationGroup');
+  const resolutionExplanationLabel = document.getElementById('resolutionExplanationLabel');
+  const resolutionExplanation = document.getElementById('resolutionExplanation');
   const escalationGroup = document.getElementById('escalationGroup');
-  const notABugExplanation = document.getElementById('notABugExplanation');
   const escalationReason = document.getElementById('escalationReason');
   const tagInput = document.getElementById('tagInput');
   const tagSuggestions = document.getElementById('tagSuggestions');
@@ -105,16 +132,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   boardSelect.addEventListener('change', () => {
     clearFoundItem();
-    // Reset tag caches/state when changing boards
+    // Reset tag + resolution-label caches when changing boards. The dropdown
+    // itself is hidden by clearFoundItem(), and the form is only re-shown by
+    // selectItem() (which awaits loadResolutionStatusLabels and re-renders),
+    // so we don't need to repaint the <select> here.
     boardTags = [];
     boardTagsForBoardId = null;
+    boardResolutionLabels = [];
+    boardResolutionLabelsForBoardId = null;
     selectedTagIds.clear();
     selectedTagMap.clear();
     refreshFindBtnState();
-    // Persist selection and preload board tags in the background
+    // Persist selection and preload board tags + resolution labels in the background
     if (boardSelect.value) {
       chrome.storage.sync.set({ selectedBoardId: boardSelect.value });
       loadBoardTags(boardSelect.value);
+      loadResolutionStatusLabels(boardSelect.value);
     }
   });
 
@@ -132,11 +165,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   findBtn.addEventListener('click', findItem);
 
-  resolutionStatusSelect.addEventListener('change', () => {
-    const isNotABug = resolutionStatusSelect.value === 'Not a bug';
-    notABugGroup.style.display = isNotABug ? 'block' : 'none';
-    if (!isNotABug) notABugExplanation.value = '';
-  });
+  resolutionStatusSelect.addEventListener('change', applyResolutionExplanationVisibility);
+
+  function applyResolutionExplanationVisibility() {
+    const meta = getResolutionExplanationMeta(resolutionStatusSelect.value);
+    if (meta) {
+      resolutionExplanationLabel.textContent = `${meta.label}: *`;
+      resolutionExplanation.placeholder = meta.placeholder;
+      resolutionExplanationGroup.style.display = 'block';
+    } else {
+      resolutionExplanationGroup.style.display = 'none';
+      resolutionExplanation.value = '';
+    }
+  }
 
   statusSelect.addEventListener('change', () => {
     const needsReason = ESCALATION_STATUSES.has(statusSelect.value);
@@ -270,8 +311,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const saved = await chrome.storage.sync.get(['selectedBoardId']);
             if (saved.selectedBoardId) {
               boardSelect.value = saved.selectedBoardId;
-              // Preload board tags for the persisted board
+              // Preload board tags + resolution-status labels for the persisted board
               loadBoardTags(saved.selectedBoardId);
+              loadResolutionStatusLabels(saved.selectedBoardId);
             }
 
             boardSelect.disabled = false;
@@ -445,8 +487,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       bugDescriptionGroup.style.display = 'block';
     }
 
-    // Make sure board tags are available; then render chips + enable input
-    await loadBoardTags(boardSelect.value);
+    // Make sure board tags + resolution labels are available; then render chips + enable input
+    await Promise.all([
+      loadBoardTags(boardSelect.value),
+      loadResolutionStatusLabels(boardSelect.value)
+    ]);
     tagInput.disabled = boardTags.length === 0;
     if (boardTags.length === 0) {
       tagInput.placeholder = 'No tags available on this board';
@@ -507,6 +552,67 @@ document.addEventListener('DOMContentLoaded', async () => {
         resolve();
       });
     });
+  }
+
+  // ===== Resolution status labels =====
+  // We always fetch fresh on board change so adding/removing/renaming/
+  // deactivating a label on the Monday board flows through to this dropdown
+  // without code changes. The background script uses Monday's typed `settings`
+  // object so deactivated labels are excluded server-side.
+
+  async function loadResolutionStatusLabels(boardId) {
+    if (!boardId) return;
+    if (boardResolutionLabelsForBoardId === boardId) return; // cached for this board
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { action: 'fetchActiveStatusLabels', boardId, columnTitle: 'Resolution status' },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            console.warn(
+              'Failed to load resolution status labels:',
+              response?.error || chrome.runtime.lastError?.message
+            );
+            boardResolutionLabels = [];
+          } else {
+            boardResolutionLabels = Array.isArray(response.labels) ? response.labels : [];
+            console.log(
+              `Loaded ${boardResolutionLabels.length} active "Resolution status" label(s):`,
+              boardResolutionLabels.map(l => l.name)
+            );
+          }
+          boardResolutionLabelsForBoardId = boardId;
+          renderResolutionStatusOptions();
+          resolve();
+        }
+      );
+    });
+  }
+
+  function renderResolutionStatusOptions() {
+    const previousValue = resolutionStatusSelect.value;
+
+    // Replace options while keeping the leading placeholder
+    resolutionStatusSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Leave unchanged --';
+    resolutionStatusSelect.appendChild(placeholder);
+
+    boardResolutionLabels.forEach(lbl => {
+      const opt = document.createElement('option');
+      opt.value = lbl.name;
+      opt.textContent = lbl.name;
+      resolutionStatusSelect.appendChild(opt);
+    });
+
+    if (previousValue && boardResolutionLabels.some(l => l.name === previousValue)) {
+      resolutionStatusSelect.value = previousValue;
+    } else {
+      resolutionStatusSelect.value = '';
+    }
+
+    applyResolutionExplanationVisibility();
   }
 
   function existingTagIdSet() {
@@ -738,8 +844,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (fields.resolutionStatus) {
       parts.push(inline('Resolution', fields.resolutionStatus));
-      if (fields.resolutionStatus === 'Not a bug' && fields.notABugExplanation) {
-        parts.push(block('Not-a-bug explanation', fields.notABugExplanation));
+      const meta = getResolutionExplanationMeta(fields.resolutionStatus);
+      if (meta && fields.resolutionExplanation) {
+        parts.push(block(meta.blockTitle, fields.resolutionExplanation));
       }
     }
 
@@ -776,7 +883,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         checksPerformed: document.getElementById('checksPerformed').value.trim(),
         actionTaken: document.getElementById('actionTaken').value.trim(),
         resolutionStatus: resolutionStatusSelect.value,
-        notABugExplanation: notABugExplanation.value.trim(),
+        resolutionExplanation: resolutionExplanation.value.trim(),
         status: statusSelect.value,
         escalationReason: escalationReason.value.trim(),
         additionalNotes: document.getElementById('additionalNotes').value.trim()
@@ -786,8 +893,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!fields.expectedBehavior) return showError('Please describe what is expected.');
       if (!fields.actionTaken) return showError('Please describe the action taken.');
 
-      if (fields.resolutionStatus === 'Not a bug' && !fields.notABugExplanation) {
-        return showError('Please explain why this is expected behavior.');
+      const resolutionMeta = getResolutionExplanationMeta(fields.resolutionStatus);
+      if (resolutionMeta && !fields.resolutionExplanation) {
+        return showError(resolutionMeta.error);
       }
       if (ESCALATION_STATUSES.has(fields.status) && !fields.escalationReason) {
         return showError('Please explain why escalation is needed.');
@@ -892,13 +1000,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('checksPerformed').value = '';
     document.getElementById('actionTaken').value = '';
     document.getElementById('additionalNotes').value = '';
-    notABugExplanation.value = '';
+    resolutionExplanation.value = '';
     escalationReason.value = '';
 
     // Reset selects + conditional fields
     resolutionStatusSelect.value = '';
     statusSelect.value = '';
-    notABugGroup.style.display = 'none';
+    resolutionExplanationGroup.style.display = 'none';
     escalationGroup.style.display = 'none';
 
     // Clear tag selections and rendered chips

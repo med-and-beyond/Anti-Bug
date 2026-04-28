@@ -11,15 +11,21 @@ export class MondayAPI {
     this.token = token;
   }
 
-  async query(query, variables = {}) {
+  async query(query, variables = {}, options = {}) {
     if (!this.token) {
       console.error('Monday.com token not set');
       throw new Error('Monday.com token not set');
     }
 
-    console.log('Monday API query:', { 
-      query: query.substring(0, 100) + '...', 
-      variables 
+    // Allow per-call overrides so we can opt newer features (e.g. the typed
+    // `settings` object on columns, available from 2025-10) into a single
+    // query without changing the API version used by the rest of the app.
+    const apiVersion = options.apiVersion || '2024-01';
+
+    console.log('Monday API query:', {
+      query: query.substring(0, 100) + '...',
+      variables,
+      apiVersion
     });
 
     try {
@@ -28,7 +34,7 @@ export class MondayAPI {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': this.token,
-          'API-Version': '2024-01'
+          'API-Version': apiVersion
         },
         body: JSON.stringify({ query, variables })
       });
@@ -597,6 +603,85 @@ export class MondayAPI {
 
     console.warn(`Column "${columnTitle}" has unsupported type "${target.type}"`);
     return { tags: [], columnType: target.type, columnId: target.id };
+  }
+
+  async fetchActiveStatusLabels(boardId, columnTitle) {
+    /**
+     * Fetch the **active** labels for a status/color column on the given
+     * board, mirroring whatever the user currently sees in Monday's "Edit
+     * Labels" panel.
+     *
+     * Monday's legacy `settings_str` payload exposes `labels` + `labels_colors`
+     * but no reliable deactivation flag — deactivated labels still appear in
+     * `labels_colors`, so filtering on that key alone leaks them into our UI.
+     *
+     * The typed `settings` object (introduced in API version 2025-10) instead
+     * returns each label as a structured object with `is_deactivated`. We
+     * pin this single query to that API version to avoid changing the rest
+     * of the app.
+     *
+     * Returns `{ labels: [{id, name, color, index, isDone}], columnId, columnType }`,
+     * sorted by Monday's display `index`. Returns an empty list (and logs a
+     * warning) when the column is missing or unsupported.
+     */
+    if (!boardId || !columnTitle) {
+      return { labels: [], columnId: null, columnType: null };
+    }
+
+    const query = `
+      query ($boardId: [ID!]!) {
+        boards(ids: $boardId) {
+          columns {
+            id
+            title
+            type
+            settings
+          }
+        }
+      }
+    `;
+
+    const data = await this.query(query, { boardId: [boardId] }, { apiVersion: '2025-10' });
+    const board = data?.boards?.[0];
+    if (!board) return { labels: [], columnId: null, columnType: null };
+
+    const columns = Array.isArray(board.columns) ? board.columns : [];
+    const target = columns.find(c =>
+      (c.title || '').trim().toLowerCase() === columnTitle.trim().toLowerCase()
+    );
+
+    if (!target) {
+      console.warn(`fetchActiveStatusLabels: column "${columnTitle}" not found on board ${boardId}`);
+      return { labels: [], columnId: null, columnType: null };
+    }
+
+    if (target.type !== 'status' && target.type !== 'color') {
+      console.warn(
+        `fetchActiveStatusLabels: column "${columnTitle}" has unsupported type "${target.type}"`
+      );
+      return { labels: [], columnId: target.id, columnType: target.type };
+    }
+
+    const settings = target.settings || {};
+    const rawLabels = Array.isArray(settings.labels) ? settings.labels : [];
+
+    const active = rawLabels
+      .filter(l => l && l.is_deactivated !== true && l.label)
+      .map(l => ({
+        id: String(l.id),
+        name: l.label,
+        color: l.hex || l.color || null,
+        index: typeof l.index === 'number' ? l.index : Number(l.id) || 0,
+        isDone: !!l.is_done
+      }))
+      .sort((a, b) => a.index - b.index);
+
+    console.log(
+      `fetchActiveStatusLabels: ${active.length} active label(s) for "${columnTitle}":`,
+      active.map(l => l.name)
+    );
+
+    return { labels: active, columnId: target.id, columnType: target.type };
   }
 
   async addUpdateToItem(itemId, body) {

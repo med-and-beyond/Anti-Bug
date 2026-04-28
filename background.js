@@ -59,7 +59,11 @@ async function handleMessage(message, sender, sendResponse) {
       case 'fetchBoardTags':
         await handleFetchBoardTags(message, sendResponse);
         break;
-      
+
+      case 'fetchActiveStatusLabels':
+        await handleFetchActiveStatusLabels(message, sendResponse);
+        break;
+
       default:
         sendResponse({ success: false, error: 'Unknown action' });
     }
@@ -393,6 +397,36 @@ async function handleFetchBoardTags(message, sendResponse) {
     });
   } catch (error) {
     console.error('fetchBoardTags failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleFetchActiveStatusLabels(message, sendResponse) {
+  const { boardId, columnTitle } = message;
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
+      return;
+    }
+    if (!columnTitle) {
+      sendResponse({ success: false, error: 'Column title is required' });
+      return;
+    }
+    mondayAPI.setToken(settings.mondayToken);
+    const result = await mondayAPI.fetchActiveStatusLabels(boardId, columnTitle);
+    sendResponse({
+      success: true,
+      labels: result.labels || [],
+      columnId: result.columnId || null,
+      columnType: result.columnType || null
+    });
+  } catch (error) {
+    console.error('fetchActiveStatusLabels failed:', error);
     sendResponse({ success: false, error: error.message });
   }
 }
