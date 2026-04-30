@@ -64,6 +64,10 @@ async function handleMessage(message, sender, sendResponse) {
         await handleFetchActiveStatusLabels(message, sendResponse);
         break;
 
+      case 'fetchUsers':
+        await handleFetchUsers(message, sendResponse);
+        break;
+
       default:
         sendResponse({ success: false, error: 'Unknown action' });
     }
@@ -431,6 +435,22 @@ async function handleFetchActiveStatusLabels(message, sendResponse) {
   }
 }
 
+async function handleFetchUsers(message, sendResponse) {
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    mondayAPI.setToken(settings.mondayToken);
+    const users = await mondayAPI.fetchUsers();
+    sendResponse({ success: true, users });
+  } catch (error) {
+    console.error('fetchUsers failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
 async function handleGetMe(message, sendResponse) {
   try {
     const settings = await chrome.storage.sync.get(['mondayToken']);
@@ -502,12 +522,15 @@ async function handleUpdateBugCase(message, sendResponse) {
 
     mondayAPI.setToken(settings.mondayToken);
 
-    // 1. Post the update body to the item
+    // 1. Post the update body. Bell notifications for any @-mentions are
+    //    fired automatically by Monday when its body parser sees the native
+    //    chip markup we emit — see `renderMentionMarkup` in
+    //    scripts/mention-autocomplete.js.
     if (body) {
       console.log('Posting update to item...');
       try {
         await mondayAPI.addUpdateToItem(itemId, body);
-        console.log('Update posted successfully');
+        console.log('Update posted successfully.');
       } catch (updateError) {
         console.error('Failed to post update:', updateError);
         sendResponse({ success: false, error: `Failed to post update: ${updateError.message}` });
