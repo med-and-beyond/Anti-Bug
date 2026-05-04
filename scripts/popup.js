@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   const settingsBtn = document.getElementById('settingsBtn');
   const createBugBtn = document.getElementById('createBugBtn');
+  const updateBugBtn = document.getElementById('updateBugBtn');
   const bugsList = document.getElementById('bugsList');
   const statusIndicator = document.getElementById('statusIndicator');
   const statusText = document.getElementById('statusText');
@@ -77,6 +78,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   createBugBtn.addEventListener('click', () => {
     // Open create bug page in a new tab
     chrome.tabs.create({ url: 'create-bug.html' });
+  });
+
+  updateBugBtn.addEventListener('click', () => {
+    // Open update bug case page in a new tab
+    chrome.tabs.create({ url: 'update-bug.html' });
   });
 
   async function checkConnectionStatus() {

@@ -253,23 +253,30 @@ body {
   padding: 16px;
   background: white;
   border-top: 1px solid #e1e4e8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.create-bug-btn {
+.create-bug-btn,
+.update-bug-btn {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 12px;
-  background: #0D6391;
-  color: white;
   border: none;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.create-bug-btn {
+  background: #0D6391;
+  color: white;
 }
 
 .create-bug-btn:hover {
@@ -277,8 +284,21 @@ body {
   box-shadow: 0 4px 12px rgba(235, 134, 52, 0.3);
 }
 
-.create-bug-btn:active {
+.create-bug-btn:active,
+.update-bug-btn:active {
   transform: translateY(0);
+}
+
+.update-bug-btn {
+  background: white;
+  color: #0D6391;
+  border: 1px solid #0D6391;
+}
+
+.update-bug-btn:hover {
+  background: #f0f7fb;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(13, 99, 145, 0.2);
 }
 
 /* Scrollbar */

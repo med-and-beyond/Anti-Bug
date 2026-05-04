@@ -44,6 +44,26 @@ async function handleMessage(message, sender, sendResponse) {
         await handleFetchBoardColumns(message, sendResponse);
         break;
       
+      case 'getMe':
+        await handleGetMe(message, sendResponse);
+        break;
+      
+      case 'findItemByName':
+        await handleFindItemByName(message, sendResponse);
+        break;
+      
+      case 'updateBugCase':
+        await handleUpdateBugCase(message, sendResponse);
+        break;
+      
+      case 'fetchBoardTags':
+        await handleFetchBoardTags(message, sendResponse);
+        break;
+
+      case 'fetchActiveStatusLabels':
+        await handleFetchActiveStatusLabels(message, sendResponse);
+        break;
+
       default:
         sendResponse({ success: false, error: 'Unknown action' });
     }
@@ -351,6 +371,295 @@ async function handleFetchBoardColumns(message, sendResponse) {
     sendResponse({ success: true, columns });
   } catch (error) {
     console.error('Fetch columns failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleFetchBoardTags(message, sendResponse) {
+  const { boardId } = message;
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
+      return;
+    }
+    mondayAPI.setToken(settings.mondayToken);
+    const result = await mondayAPI.fetchBoardTags(boardId);
+    sendResponse({
+      success: true,
+      tags: result.tags || [],
+      columnType: result.columnType || null,
+      columnId: result.columnId || null
+    });
+  } catch (error) {
+    console.error('fetchBoardTags failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleFetchActiveStatusLabels(message, sendResponse) {
+  const { boardId, columnTitle } = message;
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
+      return;
+    }
+    if (!columnTitle) {
+      sendResponse({ success: false, error: 'Column title is required' });
+      return;
+    }
+    mondayAPI.setToken(settings.mondayToken);
+    const result = await mondayAPI.fetchActiveStatusLabels(boardId, columnTitle);
+    sendResponse({
+      success: true,
+      labels: result.labels || [],
+      columnId: result.columnId || null,
+      columnType: result.columnType || null
+    });
+  } catch (error) {
+    console.error('fetchActiveStatusLabels failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleGetMe(message, sendResponse) {
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    mondayAPI.setToken(settings.mondayToken);
+    const me = await mondayAPI.fetchMe();
+    sendResponse({ success: true, me });
+  } catch (error) {
+    console.error('fetchMe failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleFindItemByName(message, sendResponse) {
+  const { boardId, name } = message;
+
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
+      return;
+    }
+    if (!name || !name.trim()) {
+      sendResponse({ success: false, error: 'Item name is required' });
+      return;
+    }
+
+    mondayAPI.setToken(settings.mondayToken);
+    const items = await mondayAPI.findItemByName(boardId, name.trim());
+    sendResponse({ success: true, items });
+  } catch (error) {
+    console.error('findItemByName failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleUpdateBugCase(message, sendResponse) {
+  const {
+    itemId,
+    boardId,
+    body,
+    resolutionStatus,
+    status,
+    personId,
+    tagIdsToAdd,
+    existingTagIds,
+    attachmentCount
+  } = message;
+
+  try {
+    console.log('=== Handling updateBugCase ===', { itemId, boardId });
+
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    if (!itemId || !boardId) {
+      sendResponse({ success: false, error: 'Item and board are required' });
+      return;
+    }
+
+    mondayAPI.setToken(settings.mondayToken);
+
+    // 1. Post the update body to the item
+    if (body) {
+      console.log('Posting update to item...');
+      try {
+        await mondayAPI.addUpdateToItem(itemId, body);
+        console.log('Update posted successfully');
+      } catch (updateError) {
+        console.error('Failed to post update:', updateError);
+        sendResponse({ success: false, error: `Failed to post update: ${updateError.message}` });
+        return;
+      }
+    }
+
+    // 2. Fetch board columns so we can resolve IDs + label values
+    console.log('Fetching board columns...');
+    const columns = await mondayAPI.fetchBoardColumns(boardId);
+
+    const findColumn = (title) => columns.find(col =>
+      col.title && col.title.toLowerCase() === title.toLowerCase()
+    );
+
+    const resolutionColumn = findColumn('Resolution status');
+    const statusColumn = findColumn('Status');
+    const ownerColumn = findColumn('Tech support owner');
+    const tagsColumn = findColumn('Tags Tech Support');
+
+    // 3. Build per-column updates (applied one-by-one for resilience)
+    const columnUpdates = [];
+
+    if (personId && ownerColumn) {
+      columnUpdates.push({
+        columnId: ownerColumn.id,
+        columnTitle: ownerColumn.title,
+        value: {
+          personsAndTeams: [{ id: parseInt(personId), kind: 'person' }]
+        }
+      });
+    } else if (personId && !ownerColumn) {
+      console.warn('No "Tech support owner" column found on board; skipping owner update');
+    }
+
+    if (resolutionStatus && resolutionColumn) {
+      const labelValue = mondayAPI.findLabelValue(resolutionColumn.settings, resolutionStatus);
+      if (labelValue) {
+        columnUpdates.push({
+          columnId: resolutionColumn.id,
+          columnTitle: resolutionColumn.title,
+          value: labelValue
+        });
+      } else {
+        console.warn(`Resolution status label "${resolutionStatus}" not found on board`);
+      }
+    }
+
+    if (status && statusColumn) {
+      const labelValue = mondayAPI.findLabelValue(statusColumn.settings, status);
+      if (labelValue) {
+        columnUpdates.push({
+          columnId: statusColumn.id,
+          columnTitle: statusColumn.title,
+          value: labelValue
+        });
+      } else {
+        console.warn(`Status label "${status}" not found on board`);
+      }
+    }
+
+    // 4. Merge chosen tag IDs with existing tag IDs (only existing tags can be selected).
+    //    Payload format depends on the underlying column type:
+    //      - "tag"/"tags"  → { tag_ids: [...] }
+    //      - "dropdown"    → { ids: [...] }
+    if (tagsColumn && Array.isArray(tagIdsToAdd) && tagIdsToAdd.length > 0) {
+      const mergedIds = Array.isArray(existingTagIds) ? [...existingTagIds] : [];
+      for (const rawId of tagIdsToAdd) {
+        const numericId = parseInt(rawId);
+        if (!Number.isNaN(numericId) && !mergedIds.includes(numericId)) {
+          mergedIds.push(numericId);
+        }
+      }
+
+      let tagValue;
+      if (tagsColumn.type === 'dropdown') {
+        tagValue = { ids: mergedIds };
+      } else {
+        // Default to tag format for "tag"/"tags" columns
+        tagValue = { tag_ids: mergedIds };
+      }
+
+      columnUpdates.push({
+        columnId: tagsColumn.id,
+        columnTitle: tagsColumn.title,
+        value: tagValue
+      });
+    }
+
+    // 5. Apply column updates one-by-one
+    const successfulUpdates = [];
+    const failedUpdates = [];
+    for (const upd of columnUpdates) {
+      try {
+        console.log(`Updating column "${upd.columnTitle}" (${upd.columnId}):`, upd.value);
+        await mondayAPI.updateColumnValues(
+          boardId,
+          itemId,
+          { [upd.columnId]: upd.value }
+        );
+        successfulUpdates.push(upd.columnTitle);
+      } catch (colErr) {
+        console.error(`Failed to update "${upd.columnTitle}":`, colErr.message);
+        failedUpdates.push({ columnTitle: upd.columnTitle, error: colErr.message });
+      }
+    }
+
+    // 6. Handle attachments
+    let uploadResults = null;
+    if (attachmentCount && attachmentCount > 0) {
+      console.log(`Uploading ${attachmentCount} attachment(s)...`);
+      const storage = await chrome.storage.local.get(['pendingAttachments']);
+      const attachments = storage.pendingAttachments || [];
+      try {
+        uploadResults = await mondayAPI.addFilesToItem(itemId, attachments);
+        console.log('Upload results:', uploadResults);
+      } catch (uploadErr) {
+        console.error('Attachment upload failed:', uploadErr);
+        uploadResults = {
+          uploaded: [],
+          failed: attachments.map(f => ({ name: f.name, error: uploadErr.message })),
+          skipped: []
+        };
+      } finally {
+        await chrome.storage.local.remove(['pendingAttachments']);
+      }
+    }
+
+    // 7. Fetch item URL for the success redirect
+    let itemUrl = message.itemUrl || null;
+
+    try {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Bug Case Updated',
+        message: `Successfully updated ${successfulUpdates.length} field(s) on the ticket`,
+        priority: 2
+      });
+    } catch (notifErr) {
+      console.warn('Notification failed:', notifErr);
+    }
+
+    sendResponse({
+      success: true,
+      item: { id: itemId, url: itemUrl },
+      successfulUpdates,
+      failedUpdates,
+      uploadResults
+    });
+  } catch (error) {
+    console.error('updateBugCase failed:', error);
     sendResponse({ success: false, error: error.message });
   }
 }
