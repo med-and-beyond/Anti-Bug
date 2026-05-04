@@ -5,6 +5,8 @@ let selectedItem = null; // { id, name, url, existingTagIds: [] }
 let currentUser = null; // { id, name, email }
 let boardTags = []; // all tags available on the current board: [{id, name, color}]
 let boardTagsForBoardId = null; // boardId that boardTags was fetched for
+let boardResolutionLabels = []; // active labels for the "Resolution status" column
+let boardResolutionLabelsForBoardId = null;
 const selectedTagIds = new Set(); // numeric tag IDs the user selected to ADD (on top of existing)
 const selectedTagMap = new Map(); // id -> { name, color } for rendering chips
 let activeSuggestionIndex = -1;
@@ -18,13 +20,36 @@ const ESCALATION_STATUSES = new Set([
   'Move to Finance'
 ]);
 
+// Resolution-status values that should show an explanation textarea, with the
+// per-status label/placeholder/error/update-section copy. Anything not listed
+// here renders no explanation field. Keys are matched case-insensitively, so
+// minor casing differences in the board column don't break the mapping.
+const RESOLUTION_EXPLANATION_META = {
+  'not a bug': {
+    label: 'Why this is expected behavior',
+    placeholder: 'Explain why this is expected behavior',
+    error: 'Please explain why this is expected behavior.',
+    blockTitle: 'Not-a-bug explanation'
+  },
+  'stuck': {
+    label: 'What is blocking progress',
+    placeholder: 'Describe what is blocking progress on this ticket',
+    error: 'Please describe what is blocking progress on this ticket.',
+    blockTitle: 'Stuck reason'
+  }
+};
+
+function getResolutionExplanationMeta(statusValue) {
+  if (!statusValue) return null;
+  return RESOLUTION_EXPLANATION_META[statusValue.trim().toLowerCase()] || null;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const updateForm = document.getElementById('updateForm');
   const closeBtn = document.getElementById('closeBtn');
   const cancelBtn = document.getElementById('cancelBtn');
   const submitBtn = document.getElementById('submitBtn');
   const boardSelect = document.getElementById('boardSelect');
-  const groupSelect = document.getElementById('groupSelect');
   const itemNameInput = document.getElementById('itemNameInput');
   const findBtn = document.getElementById('findBtn');
   const lookupStatus = document.getElementById('lookupStatus');
@@ -32,14 +57,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const updateFieldsSection = document.getElementById('updateFieldsSection');
   const resolutionStatusSelect = document.getElementById('resolutionStatusSelect');
   const statusSelect = document.getElementById('statusSelect');
-  const notABugGroup = document.getElementById('notABugGroup');
+  const resolutionExplanationGroup = document.getElementById('resolutionExplanationGroup');
+  const resolutionExplanationLabel = document.getElementById('resolutionExplanationLabel');
+  const resolutionExplanation = document.getElementById('resolutionExplanation');
   const escalationGroup = document.getElementById('escalationGroup');
-  const notABugExplanation = document.getElementById('notABugExplanation');
   const escalationReason = document.getElementById('escalationReason');
   const tagInput = document.getElementById('tagInput');
   const tagSuggestions = document.getElementById('tagSuggestions');
   const currentTagsDiv = document.getElementById('currentTags');
   const ownerBadge = document.getElementById('ownerBadge');
+  const bugDescriptionGroup = document.getElementById('bugDescriptionGroup');
+  const bugDescriptionDisplay = document.getElementById('bugDescriptionDisplay');
 
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
@@ -97,27 +125,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     await submitUpdate();
   });
 
-  // Enable/disable Find button based on board + group + input
+  // Enable/disable Find button based on board + input
   function refreshFindBtnState() {
-    findBtn.disabled = !(boardSelect.value && groupSelect.value && itemNameInput.value.trim());
+    findBtn.disabled = !(boardSelect.value && itemNameInput.value.trim());
   }
 
-  boardSelect.addEventListener('change', async () => {
-    await loadGroups();
+  boardSelect.addEventListener('change', () => {
     clearFoundItem();
-    // Reset tag caches/state when changing boards
+    // Reset tag + resolution-label caches when changing boards. The dropdown
+    // itself is hidden by clearFoundItem(), and the form is only re-shown by
+    // selectItem() (which awaits loadResolutionStatusLabels and re-renders),
+    // so we don't need to repaint the <select> here.
     boardTags = [];
     boardTagsForBoardId = null;
+    boardResolutionLabels = [];
+    boardResolutionLabelsForBoardId = null;
     selectedTagIds.clear();
     selectedTagMap.clear();
     refreshFindBtnState();
-    // Preload board tags in the background
-    if (boardSelect.value) loadBoardTags(boardSelect.value);
-  });
-
-  groupSelect.addEventListener('change', () => {
-    clearFoundItem();
-    refreshFindBtnState();
+    // Persist selection and preload board tags + resolution labels in the background
+    if (boardSelect.value) {
+      chrome.storage.sync.set({ selectedBoardId: boardSelect.value });
+      loadBoardTags(boardSelect.value);
+      loadResolutionStatusLabels(boardSelect.value);
+    }
   });
 
   itemNameInput.addEventListener('input', () => {
@@ -134,11 +165,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   findBtn.addEventListener('click', findItem);
 
-  resolutionStatusSelect.addEventListener('change', () => {
-    const isNotABug = resolutionStatusSelect.value === 'Not a bug';
-    notABugGroup.style.display = isNotABug ? 'block' : 'none';
-    if (!isNotABug) notABugExplanation.value = '';
-  });
+  resolutionStatusSelect.addEventListener('change', applyResolutionExplanationVisibility);
+
+  function applyResolutionExplanationVisibility() {
+    const meta = getResolutionExplanationMeta(resolutionStatusSelect.value);
+    if (meta) {
+      resolutionExplanationLabel.textContent = `${meta.label}: *`;
+      resolutionExplanation.placeholder = meta.placeholder;
+      resolutionExplanationGroup.style.display = 'block';
+    } else {
+      resolutionExplanationGroup.style.display = 'none';
+      resolutionExplanation.value = '';
+    }
+  }
 
   statusSelect.addEventListener('change', () => {
     const needsReason = ESCALATION_STATUSES.has(statusSelect.value);
@@ -264,7 +303,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const option = document.createElement('option');
                 option.value = board.id;
                 option.textContent = board.name;
-                option.dataset.groups = JSON.stringify(board.groups);
                 optgroup.appendChild(option);
               });
               boardSelect.appendChild(optgroup);
@@ -273,9 +311,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const saved = await chrome.storage.sync.get(['selectedBoardId']);
             if (saved.selectedBoardId) {
               boardSelect.value = saved.selectedBoardId;
-              await loadGroups();
-              // Preload board tags for the persisted board
+              // Preload board tags + resolution-status labels for the persisted board
               loadBoardTags(saved.selectedBoardId);
+              loadResolutionStatusLabels(saved.selectedBoardId);
             }
 
             boardSelect.disabled = false;
@@ -291,29 +329,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       boardSelect.innerHTML = '<option value="">Error loading boards</option>';
       boardSelect.disabled = false;
     }
-  }
-
-  async function loadGroups() {
-    const selectedOption = boardSelect.options[boardSelect.selectedIndex];
-    if (!selectedOption || !selectedOption.dataset.groups) {
-      groupSelect.innerHTML = '<option value="">Select board first</option>';
-      return;
-    }
-
-    const groups = JSON.parse(selectedOption.dataset.groups);
-    groupSelect.innerHTML = '<option value="">Select a group</option>';
-    groups.forEach(group => {
-      const option = document.createElement('option');
-      option.value = group.id;
-      option.textContent = group.title;
-      groupSelect.appendChild(option);
-    });
-
-    const saved = await chrome.storage.sync.get(['selectedGroupId']);
-    if (saved.selectedGroupId && groups.find(g => g.id === saved.selectedGroupId)) {
-      groupSelect.value = saved.selectedGroupId;
-    }
-    refreshFindBtnState();
   }
 
   async function loadCurrentUser() {
@@ -348,6 +363,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     tagInput.disabled = true;
     tagInput.value = '';
     tagSuggestions.style.display = 'none';
+    bugDescriptionGroup.style.display = 'none';
+    bugDescriptionDisplay.textContent = '';
+    bugDescriptionDisplay.classList.remove('is-empty');
   }
 
   function findItem() {
@@ -357,24 +375,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!name) return;
 
     const boardId = boardSelect.value;
-    const groupId = groupSelect.value;
-    if (!boardId || !groupId) {
+    if (!boardId) {
       lookupStatus.className = 'lookup-status error';
-      lookupStatus.textContent = 'Please select a board and group first.';
+      lookupStatus.textContent = 'Please select a board first.';
       return;
     }
 
     lookupStatus.className = 'lookup-status info';
-    lookupStatus.textContent = 'Searching...';
+    lookupStatus.textContent = 'Searching entire board...';
     lookupCandidates.style.display = 'none';
     lookupCandidates.innerHTML = '';
 
-    // Do NOT persist the selection here — the default configuration is managed
-    // from the Settings page (Bug Lists). Ad-hoc board/group changes on this
-    // page are one-off for the current lookup.
+    chrome.storage.sync.set({ selectedBoardId: boardId });
 
     chrome.runtime.sendMessage(
-      { action: 'findItemByName', boardId, groupId, name },
+      { action: 'findItemByName', boardId, name },
       (response) => {
         if (chrome.runtime.lastError) {
           lookupStatus.className = 'lookup-status error';
@@ -390,7 +405,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const items = response.items || [];
         if (items.length === 0) {
           lookupStatus.className = 'lookup-status error';
-          lookupStatus.textContent = `No item matching "${name}" found in the selected group.`;
+          lookupStatus.textContent = `No item matching "${name}" found on this board.`;
           return;
         }
 
@@ -418,7 +433,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           nameEl.textContent = item.name;
           const meta = document.createElement('div');
           meta.className = 'cand-meta';
-          meta.textContent = `ID: ${item.id}`;
+          const groupTitle = item.group?.title;
+          meta.textContent = groupTitle
+            ? `Group: ${groupTitle} · ID: ${item.id}`
+            : `ID: ${item.id}`;
           div.appendChild(nameEl);
           div.appendChild(meta);
           div.addEventListener('click', () => selectItem(item));
@@ -456,8 +474,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateFieldsSection.style.display = 'block';
     submitBtn.disabled = false;
 
-    // Make sure board tags are available; then render chips + enable input
-    await loadBoardTags(boardSelect.value);
+    const descCol = findDescriptionColumn(item);
+    if (!descCol) {
+      bugDescriptionGroup.style.display = 'none';
+      bugDescriptionDisplay.textContent = '';
+      bugDescriptionDisplay.classList.remove('is-empty');
+      showError('This board has no "Description" column, so the bug case description cannot be displayed.');
+    } else {
+      const text = (descCol.text || '').trim();
+      bugDescriptionDisplay.textContent = text || '(No description provided)';
+      bugDescriptionDisplay.classList.toggle('is-empty', !text);
+      bugDescriptionGroup.style.display = 'block';
+    }
+
+    // Make sure board tags + resolution labels are available; then render chips + enable input
+    await Promise.all([
+      loadBoardTags(boardSelect.value),
+      loadResolutionStatusLabels(boardSelect.value)
+    ]);
     tagInput.disabled = boardTags.length === 0;
     if (boardTags.length === 0) {
       tagInput.placeholder = 'No tags available on this board';
@@ -481,6 +515,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
       return [];
     }
+  }
+
+  function findDescriptionColumn(item) {
+    return (item.column_values || []).find(col =>
+      (col.column?.title || '').trim().toLowerCase() === 'description'
+    );
   }
 
   function extractTagNames(item) {
@@ -512,6 +552,67 @@ document.addEventListener('DOMContentLoaded', async () => {
         resolve();
       });
     });
+  }
+
+  // ===== Resolution status labels =====
+  // We always fetch fresh on board change so adding/removing/renaming/
+  // deactivating a label on the Monday board flows through to this dropdown
+  // without code changes. The background script uses Monday's typed `settings`
+  // object so deactivated labels are excluded server-side.
+
+  async function loadResolutionStatusLabels(boardId) {
+    if (!boardId) return;
+    if (boardResolutionLabelsForBoardId === boardId) return; // cached for this board
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { action: 'fetchActiveStatusLabels', boardId, columnTitle: 'Resolution status' },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            console.warn(
+              'Failed to load resolution status labels:',
+              response?.error || chrome.runtime.lastError?.message
+            );
+            boardResolutionLabels = [];
+          } else {
+            boardResolutionLabels = Array.isArray(response.labels) ? response.labels : [];
+            console.log(
+              `Loaded ${boardResolutionLabels.length} active "Resolution status" label(s):`,
+              boardResolutionLabels.map(l => l.name)
+            );
+          }
+          boardResolutionLabelsForBoardId = boardId;
+          renderResolutionStatusOptions();
+          resolve();
+        }
+      );
+    });
+  }
+
+  function renderResolutionStatusOptions() {
+    const previousValue = resolutionStatusSelect.value;
+
+    // Replace options while keeping the leading placeholder
+    resolutionStatusSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Leave unchanged --';
+    resolutionStatusSelect.appendChild(placeholder);
+
+    boardResolutionLabels.forEach(lbl => {
+      const opt = document.createElement('option');
+      opt.value = lbl.name;
+      opt.textContent = lbl.name;
+      resolutionStatusSelect.appendChild(opt);
+    });
+
+    if (previousValue && boardResolutionLabels.some(l => l.name === previousValue)) {
+      resolutionStatusSelect.value = previousValue;
+    } else {
+      resolutionStatusSelect.value = '';
+    }
+
+    applyResolutionExplanationVisibility();
   }
 
   function existingTagIdSet() {
@@ -713,40 +814,59 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ===== Submit =====
 
   function buildUpdateBody(fields) {
-    let body = 'TECH SUPPORT UPDATE\n\n';
+    // Monday's create_update body is HTML-formatted, so we render the same
+    // content with lightweight HTML for a clean, scannable update.
+    const escapeHtml = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+    const multiline = (s) => escapeHtml(s).replace(/\r?\n/g, '<br/>');
 
-    body += 'Problem:\n' + fields.problemDescription + '\n\n';
-    body += 'Expected:\n' + fields.expectedBehavior + '\n\n';
+    const block = (label, value) =>
+      `<p><b>${escapeHtml(label)}:</b><br/>${multiline(value)}</p>`;
+    const inline = (label, value) =>
+      `<p><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`;
+
+    const parts = [];
+    parts.push('<h3><b>Tech Support Update</b></h3>');
+    parts.push('<hr/>');
+
+    parts.push(block('Problem', fields.problemDescription));
+    parts.push(block('Expected', fields.expectedBehavior));
 
     if (fields.checksPerformed) {
-      body += 'Checks Performed:\n' + fields.checksPerformed + '\n\n';
+      parts.push(block('Checks Performed', fields.checksPerformed));
     }
 
-    body += 'Action Taken:\n' + fields.actionTaken + '\n';
+    parts.push(block('Action Taken', fields.actionTaken));
 
     if (fields.resolutionStatus) {
-      body += '\nResolution: ' + fields.resolutionStatus + '\n';
-      if (fields.resolutionStatus === 'Not a bug' && fields.notABugExplanation) {
-        body += 'Not-a-bug explanation:\n' + fields.notABugExplanation + '\n';
+      parts.push(inline('Resolution', fields.resolutionStatus));
+      const meta = getResolutionExplanationMeta(fields.resolutionStatus);
+      if (meta && fields.resolutionExplanation) {
+        parts.push(block(meta.blockTitle, fields.resolutionExplanation));
       }
     }
 
     if (fields.status) {
-      body += '\nStatus: ' + fields.status + '\n';
+      parts.push(inline('Status', fields.status));
       if (ESCALATION_STATUSES.has(fields.status) && fields.escalationReason) {
-        body += 'Escalation reason:\n' + fields.escalationReason + '\n';
+        parts.push(block('Escalation reason', fields.escalationReason));
       }
     }
 
     if (fields.additionalNotes) {
-      body += '\nAdditional Notes:\n' + fields.additionalNotes + '\n';
+      parts.push(block('Additional Notes', fields.additionalNotes));
     }
 
     if (currentUser?.name) {
-      body += '\n---\nUpdated by: ' + currentUser.name;
+      parts.push('<hr/>');
+      parts.push(`<p><i>Updated by: <b>${escapeHtml(currentUser.name)}</b></i></p>`);
     }
 
-    return body.trim();
+    return parts.join('');
   }
 
   async function submitUpdate() {
@@ -763,7 +883,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         checksPerformed: document.getElementById('checksPerformed').value.trim(),
         actionTaken: document.getElementById('actionTaken').value.trim(),
         resolutionStatus: resolutionStatusSelect.value,
-        notABugExplanation: notABugExplanation.value.trim(),
+        resolutionExplanation: resolutionExplanation.value.trim(),
         status: statusSelect.value,
         escalationReason: escalationReason.value.trim(),
         additionalNotes: document.getElementById('additionalNotes').value.trim()
@@ -773,8 +893,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!fields.expectedBehavior) return showError('Please describe what is expected.');
       if (!fields.actionTaken) return showError('Please describe the action taken.');
 
-      if (fields.resolutionStatus === 'Not a bug' && !fields.notABugExplanation) {
-        return showError('Please explain why this is expected behavior.');
+      const resolutionMeta = getResolutionExplanationMeta(fields.resolutionStatus);
+      if (resolutionMeta && !fields.resolutionExplanation) {
+        return showError(resolutionMeta.error);
       }
       if (ESCALATION_STATUSES.has(fields.status) && !fields.escalationReason) {
         return showError('Please explain why escalation is needed.');
@@ -879,13 +1000,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('checksPerformed').value = '';
     document.getElementById('actionTaken').value = '';
     document.getElementById('additionalNotes').value = '';
-    notABugExplanation.value = '';
+    resolutionExplanation.value = '';
     escalationReason.value = '';
 
     // Reset selects + conditional fields
     resolutionStatusSelect.value = '';
     statusSelect.value = '';
-    notABugGroup.style.display = 'none';
+    resolutionExplanationGroup.style.display = 'none';
     escalationGroup.style.display = 'none';
 
     // Clear tag selections and rendered chips

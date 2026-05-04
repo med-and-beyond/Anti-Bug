@@ -59,7 +59,11 @@ async function handleMessage(message, sender, sendResponse) {
       case 'fetchBoardTags':
         await handleFetchBoardTags(message, sendResponse);
         break;
-      
+
+      case 'fetchActiveStatusLabels':
+        await handleFetchActiveStatusLabels(message, sendResponse);
+        break;
+
       default:
         sendResponse({ success: false, error: 'Unknown action' });
     }
@@ -400,6 +404,36 @@ async function handleFetchBoardTags(message, sendResponse) {
   }
 }
 
+async function handleFetchActiveStatusLabels(message, sendResponse) {
+  const { boardId, columnTitle } = message;
+  try {
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+    if (!settings.mondayToken) {
+      sendResponse({ success: false, error: 'Monday.com not connected' });
+      return;
+    }
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
+      return;
+    }
+    if (!columnTitle) {
+      sendResponse({ success: false, error: 'Column title is required' });
+      return;
+    }
+    mondayAPI.setToken(settings.mondayToken);
+    const result = await mondayAPI.fetchActiveStatusLabels(boardId, columnTitle);
+    sendResponse({
+      success: true,
+      labels: result.labels || [],
+      columnId: result.columnId || null,
+      columnType: result.columnType || null
+    });
+  } catch (error) {
+    console.error('fetchActiveStatusLabels failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
 async function handleGetMe(message, sendResponse) {
   try {
     const settings = await chrome.storage.sync.get(['mondayToken']);
@@ -417,7 +451,7 @@ async function handleGetMe(message, sendResponse) {
 }
 
 async function handleFindItemByName(message, sendResponse) {
-  const { boardId, groupId, name } = message;
+  const { boardId, name } = message;
 
   try {
     const settings = await chrome.storage.sync.get(['mondayToken']);
@@ -425,8 +459,8 @@ async function handleFindItemByName(message, sendResponse) {
       sendResponse({ success: false, error: 'Monday.com not connected' });
       return;
     }
-    if (!boardId || !groupId) {
-      sendResponse({ success: false, error: 'Board and group are required' });
+    if (!boardId) {
+      sendResponse({ success: false, error: 'Board is required' });
       return;
     }
     if (!name || !name.trim()) {
@@ -435,7 +469,7 @@ async function handleFindItemByName(message, sendResponse) {
     }
 
     mondayAPI.setToken(settings.mondayToken);
-    const items = await mondayAPI.findItemByName(boardId, groupId, name.trim());
+    const items = await mondayAPI.findItemByName(boardId, name.trim());
     sendResponse({ success: true, items });
   } catch (error) {
     console.error('findItemByName failed:', error);
