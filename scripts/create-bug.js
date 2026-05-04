@@ -1063,11 +1063,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       console.log('Validation passed, creating bug with:', { title, boardId, groupId });
 
-      // Save board/group selection
-      await chrome.storage.sync.set({
-        selectedBoardId: boardId,
-        selectedGroupId: groupId
-      });
+      // Do NOT persist board/group here — the default configuration is managed
+      // from the Settings page (Bug Lists). Ad-hoc board/group changes on this
+      // page are one-off for the current submission.
 
       // Gather bug data
       const bugData = {

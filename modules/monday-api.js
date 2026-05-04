@@ -177,12 +177,14 @@ export class MondayAPI {
     return allBoards;
   }
 
-  async fetchRecentItems(boardId, groupId, limit = 10) {
-    const query = `
+  async fetchRecentItems(boardId, groupId, limit = 500) {
+    // Fetch the first page scoped to the selected group, ordered newest-first.
+    const firstPageQuery = `
       query ($boardId: [ID!]!, $limit: Int!) {
         boards(ids: $boardId) {
           groups(ids: ["${groupId}"]) {
             items_page(limit: $limit, query_params: { order_by: [{column_id: "__creation_log__", direction: desc}] }) {
+              cursor
               items {
                 id
                 name
@@ -206,16 +208,67 @@ export class MondayAPI {
       }
     `;
 
-    const data = await this.query(query, { 
-      boardId: [boardId], 
-      limit 
+    const firstPageData = await this.query(firstPageQuery, {
+      boardId: [boardId],
+      limit
     });
 
-    if (data.boards && data.boards[0] && data.boards[0].groups[0]) {
-      return data.boards[0].groups[0].items_page.items;
+    if (!firstPageData.boards || !firstPageData.boards[0] || !firstPageData.boards[0].groups[0]) {
+      return [];
     }
 
-    return [];
+    const firstPage = firstPageData.boards[0].groups[0].items_page;
+    const allItems = [...(firstPage.items || [])];
+    let cursor = firstPage.cursor;
+
+    // Follow the cursor to gather every remaining item in the group.
+    // Monday's next_items_page is not scoped by group, but the cursor from a
+    // group-scoped items_page only yields items from that same group.
+    const nextPageQuery = `
+      query ($cursor: String!, $limit: Int!) {
+        next_items_page(cursor: $cursor, limit: $limit) {
+          cursor
+          items {
+            id
+            name
+            url
+            created_at
+            updated_at
+            column_values {
+              id
+              text
+              value
+              column {
+                title
+                type
+                settings_str
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    // Safety cap to avoid runaway loops on unexpectedly huge boards.
+    const maxPages = 100;
+    let pagesFetched = 1;
+
+    while (cursor && pagesFetched < maxPages) {
+      const nextData = await this.query(nextPageQuery, { cursor, limit });
+      const page = nextData.next_items_page;
+      if (!page) break;
+
+      if (Array.isArray(page.items) && page.items.length > 0) {
+        allItems.push(...page.items);
+      }
+
+      cursor = page.cursor;
+      pagesFetched++;
+
+      if (!cursor) break;
+    }
+
+    return allItems;
   }
 
   async fetchBoardColumns(boardId) {

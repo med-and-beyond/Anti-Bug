@@ -3,6 +3,11 @@
 let allBugs = []; // Store all bugs for client-side filtering
 let filteredBugs = []; // Currently displayed bugs
 
+// Saved configurations + which one the popup is currently viewing
+let savedConfigurations = [];
+let defaultConfigurationId = null;
+let activeConfigId = null;
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Easter Egg: Click logo 17 times to open random Oggy video
   const logoImg = document.querySelector('.logo img');
@@ -54,12 +59,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('statusText');
   const searchInput = document.getElementById('searchInput');
   const resultsCount = document.getElementById('resultsCount');
+  const configSwitcher = document.getElementById('configSwitcher');
+  const configSelect = document.getElementById('configSelect');
+
+  // Load saved configurations and pick the active one
+  await loadConfigurations();
 
   // Check connection status
   await checkConnectionStatus();
 
-  // Load recent bugs
+  // Populate the config switcher dropdown
+  renderConfigSwitcher();
+
+  // Load recent bugs for the active configuration
   await loadRecentBugs();
+
+  configSelect.addEventListener('change', async (e) => {
+    activeConfigId = e.target.value;
+    await chrome.storage.local.set({ activePopupConfigId: activeConfigId });
+    allBugs = [];
+    filteredBugs = [];
+    searchInput.value = '';
+    await loadRecentBugs();
+  });
 
   // Search functionality with debounce
   let searchTimeout;
@@ -85,16 +107,87 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.create({ url: 'update-bug.html' });
   });
 
+  async function loadConfigurations() {
+    try {
+      const sync = await chrome.storage.sync.get([
+        'savedConfigurations',
+        'defaultConfigurationId'
+      ]);
+      const local = await chrome.storage.local.get(['activePopupConfigId']);
+
+      savedConfigurations = Array.isArray(sync.savedConfigurations)
+        ? sync.savedConfigurations
+        : [];
+      defaultConfigurationId = sync.defaultConfigurationId || null;
+
+      const storedActiveId = local.activePopupConfigId || null;
+      const hasStoredActive = storedActiveId &&
+        savedConfigurations.some(cfg => cfg.id === storedActiveId);
+      const hasDefault = defaultConfigurationId &&
+        savedConfigurations.some(cfg => cfg.id === defaultConfigurationId);
+
+      if (hasStoredActive) {
+        activeConfigId = storedActiveId;
+      } else if (hasDefault) {
+        activeConfigId = defaultConfigurationId;
+      } else if (savedConfigurations.length > 0) {
+        activeConfigId = savedConfigurations[0].id;
+      } else {
+        activeConfigId = null;
+      }
+
+      // If the stored active id was stale, tidy up
+      if (storedActiveId && !hasStoredActive) {
+        if (activeConfigId) {
+          await chrome.storage.local.set({ activePopupConfigId: activeConfigId });
+        } else {
+          await chrome.storage.local.remove(['activePopupConfigId']);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading configurations:', error);
+      savedConfigurations = [];
+      defaultConfigurationId = null;
+      activeConfigId = null;
+    }
+  }
+
+  function renderConfigSwitcher() {
+    if (savedConfigurations.length <= 1) {
+      configSwitcher.hidden = true;
+      return;
+    }
+
+    configSwitcher.hidden = false;
+    configSelect.innerHTML = '';
+
+    savedConfigurations.forEach(cfg => {
+      const option = document.createElement('option');
+      option.value = cfg.id;
+      const isDefault = cfg.id === defaultConfigurationId ? ' (default)' : '';
+      option.textContent = `${cfg.boardName} / ${cfg.groupTitle}${isDefault}`;
+      if (cfg.id === activeConfigId) {
+        option.selected = true;
+      }
+      configSelect.appendChild(option);
+    });
+  }
+
+  function getActiveConfiguration() {
+    if (!activeConfigId) return null;
+    return savedConfigurations.find(cfg => cfg.id === activeConfigId) || null;
+  }
+
   async function checkConnectionStatus() {
     try {
-      const settings = await chrome.storage.sync.get(['mondayToken', 'selectedBoardId', 'selectedGroupId']);
-      
-      if (settings.mondayToken && settings.selectedBoardId && settings.selectedGroupId) {
+      const settings = await chrome.storage.sync.get(['mondayToken']);
+
+      if (settings.mondayToken && getActiveConfiguration()) {
         statusIndicator.className = 'status-indicator connected';
         statusText.textContent = 'Connected to Monday.com';
       } else if (settings.mondayToken) {
         statusIndicator.className = 'status-indicator warning';
-        statusText.textContent = 'Please select board and group';
+        statusText.textContent = 'Please add a bug list in settings';
       } else {
         statusIndicator.className = 'status-indicator disconnected';
         statusText.textContent = 'Not connected to Monday.com';
@@ -107,16 +200,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function loadRecentBugs() {
     try {
       console.log('Loading recent bugs...');
-      const settings = await chrome.storage.sync.get(['mondayToken', 'selectedBoardId', 'selectedGroupId']);
-      
+      const settings = await chrome.storage.sync.get(['mondayToken']);
+      const activeConfig = getActiveConfiguration();
+
       console.log('Settings loaded:', {
         hasToken: !!settings.mondayToken,
-        boardId: settings.selectedBoardId,
-        groupId: settings.selectedGroupId
+        activeConfigId,
+        boardId: activeConfig?.boardId,
+        groupId: activeConfig?.groupId
       });
-      
-      if (!settings.mondayToken || !settings.selectedBoardId || !settings.selectedGroupId) {
+
+      if (!settings.mondayToken) {
         bugsList.innerHTML = '<div class="empty-state">Connect to Monday.com in settings to view bugs</div>';
+        resultsCount.textContent = '';
+        return;
+      }
+
+      if (!activeConfig) {
+        bugsList.innerHTML = '<div class="empty-state">Add a bug list in settings to view bugs</div>';
         resultsCount.textContent = '';
         return;
       }
@@ -124,9 +225,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       bugsList.innerHTML = '<div class="loading">Loading bugs...</div>';
       resultsCount.textContent = '';
 
-      // Request bugs from background script
+      // Request bugs from background script, scoped to the active configuration
       chrome.runtime.sendMessage(
-        { action: 'fetchRecentBugs' },
+        {
+          action: 'fetchRecentBugs',
+          boardId: activeConfig.boardId,
+          groupId: activeConfig.groupId
+        },
         (response) => {
           console.log('Received bugs response:', response);
           

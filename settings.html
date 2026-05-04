@@ -52,10 +52,22 @@
         </div>
       </section>
 
-      <!-- Board & Group Selection -->
+      <!-- Bug Lists (saved configurations) -->
       <section class="settings-section">
-        <h2>Board & Group Selection</h2>
-        
+        <h2>Bug Lists</h2>
+        <p class="help-text section-intro">
+          Save one or more Board + Group combinations. The popup will let you switch between them.
+          The <strong>Default</strong> configuration is used when creating or updating bugs.
+        </p>
+
+        <!-- Saved Configurations List -->
+        <div class="saved-configurations" id="savedConfigurations">
+          <div class="empty-state-inline">No configurations saved yet. Add your first one below.</div>
+        </div>
+
+        <!-- Add Configuration Form -->
+        <h3 class="subsection-title">Add a Configuration</h3>
+
         <div class="boards-search-container">
           <div class="form-group">
             <label for="boardSearch">Search Boards:</label>
@@ -93,7 +105,7 @@
           </select>
         </div>
 
-        <button type="button" class="primary-btn" id="saveSelectionBtn">Save Selection</button>
+        <button type="button" class="primary-btn" id="addConfigurationBtn">Add Configuration</button>
       </section>
       <!-- Privacy & Consent -->
       <section class="settings-section">
