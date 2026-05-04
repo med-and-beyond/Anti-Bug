@@ -460,6 +460,66 @@ export class MondayAPI {
     return data.me;
   }
 
+  async fetchUsers() {
+    /**
+     * Fetch all enabled non-guest users on the account (paged), to power the
+     * @-mention autocomplete in update-bug text fields.
+     *
+     * Returns `{ id, name, email, url, photoThumb }[]`. `url` is the user's
+     * Monday profile URL, used as the `href` of the rendered mention chip.
+     */
+    console.log('Fetching Monday users for @-mention picker...');
+    const all = [];
+    const limit = 200;
+    let page = 1;
+    const MAX_PAGES = 25;
+
+    while (page <= MAX_PAGES) {
+      const query = `
+        query ($page: Int!, $limit: Int!) {
+          users(kind: non_guests, limit: $limit, page: $page) {
+            id
+            name
+            email
+            enabled
+            url
+            photo_thumb_small
+          }
+        }
+      `;
+
+      let batch = [];
+      try {
+        const data = await this.query(query, { page, limit });
+        batch = Array.isArray(data?.users) ? data.users : [];
+      } catch (error) {
+        console.warn(`fetchUsers: page ${page} failed:`, error.message);
+        break;
+      }
+
+      if (batch.length === 0) break;
+
+      for (const u of batch) {
+        if (u && u.enabled !== false && u.name) {
+          all.push({
+            id: String(u.id),
+            name: u.name,
+            email: u.email || '',
+            url: u.url || '',
+            photoThumb: u.photo_thumb_small || null
+          });
+        }
+      }
+
+      if (batch.length < limit) break;
+      page += 1;
+    }
+
+    all.sort((a, b) => a.name.localeCompare(b.name));
+    console.log(`fetchUsers: returning ${all.length} user(s)`);
+    return all;
+  }
+
   async findItemByName(boardId, name) {
     /**
      * Search for items across the entire board whose name contains the given text.

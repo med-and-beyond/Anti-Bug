@@ -1,5 +1,7 @@
 // Update Bug Case Script - post investigation update + column changes to an existing Monday item
 
+import { createMentionController } from './mention-autocomplete.js';
+
 let attachedFiles = [];
 let selectedItem = null; // { id, name, url, existingTagIds: [] }
 let currentUser = null; // { id, name, email }
@@ -10,6 +12,22 @@ let boardResolutionLabelsForBoardId = null;
 const selectedTagIds = new Set(); // numeric tag IDs the user selected to ADD (on top of existing)
 const selectedTagMap = new Map(); // id -> { name, color } for rendering chips
 let activeSuggestionIndex = -1;
+
+// Cached Monday users for @-mention autocomplete (loaded once per page).
+let mondayUsers = [];
+const mentionController = createMentionController({ getUsers: () => mondayUsers });
+
+// IDs of plain-text fields that should support @-mention autocomplete.
+// Selection fields (resolutionStatusSelect, statusSelect) are intentionally excluded.
+const MENTION_FIELD_IDS = [
+  'problemDescription',
+  'expectedBehavior',
+  'checksPerformed',
+  'actionTaken',
+  'resolutionExplanation',
+  'escalationReason',
+  'additionalNotes'
+];
 
 const ESCALATION_STATUSES = new Set([
   'Pending dev',
@@ -114,8 +132,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   closeBtn.addEventListener('click', () => window.close());
   cancelBtn.addEventListener('click', () => window.close());
 
-  // Load boards and current user in parallel
-  await Promise.all([loadBoards(), loadCurrentUser()]);
+  // Attach @-mention autocomplete to every plain-text update field.
+  // Users are loaded asynchronously; the popup just shows "no matches" until
+  // the list lands, then becomes fully functional without re-attachment.
+  MENTION_FIELD_IDS.forEach((id) => {
+    const field = document.getElementById(id);
+    if (field) mentionController.attach(field);
+  });
+
+  // Load boards, current user, and the user directory in parallel
+  await Promise.all([loadBoards(), loadCurrentUser(), loadMondayUsers()]);
 
   // Wire up form submit
   updateForm.addEventListener('submit', async (e) => {
@@ -343,6 +369,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         currentUser = response.me;
         ownerBadge.textContent = currentUser.name || currentUser.email || `User ${currentUser.id}`;
+        resolve();
+      });
+    });
+  }
+
+  async function loadMondayUsers() {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'fetchUsers' }, (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          console.warn(
+            'Could not load Monday users for @-mention picker:',
+            response?.error || chrome.runtime.lastError?.message
+          );
+          mondayUsers = [];
+          resolve();
+          return;
+        }
+        mondayUsers = Array.isArray(response.users) ? response.users : [];
+        console.log(`Loaded ${mondayUsers.length} Monday user(s) for @-mention picker`);
         resolve();
       });
     });
@@ -813,19 +858,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ===== Submit =====
 
-  function buildUpdateBody(fields) {
-    // Monday's create_update body is HTML-formatted, so we render the same
-    // content with lightweight HTML for a clean, scannable update.
+  function buildUpdateBody(fields, fieldsHtml) {
+    // Monday's create_update body is HTML-formatted. Free-text fields are
+    // pre-serialized by the @-mention controller (escaped + <br/>'d, with
+    // <a data-mention-...> tags inserted for tracked mentions), so we splice
+    // those HTML snippets in directly. Selection values + the "Updated by"
+    // footer still go through escapeHtml since they're plain strings.
     const escapeHtml = (s) => String(s == null ? '' : s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
-    const multiline = (s) => escapeHtml(s).replace(/\r?\n/g, '<br/>');
 
-    const block = (label, value) =>
-      `<p><b>${escapeHtml(label)}:</b><br/>${multiline(value)}</p>`;
+    const blockHtml = (label, html) =>
+      `<p><b>${escapeHtml(label)}:</b><br/>${html}</p>`;
     const inline = (label, value) =>
       `<p><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`;
 
@@ -833,32 +880,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     parts.push('<h3><b>Tech Support Update</b></h3>');
     parts.push('<hr/>');
 
-    parts.push(block('Problem', fields.problemDescription));
-    parts.push(block('Expected', fields.expectedBehavior));
+    parts.push(blockHtml('Problem', fieldsHtml.problemDescription));
+    parts.push(blockHtml('Expected', fieldsHtml.expectedBehavior));
 
     if (fields.checksPerformed) {
-      parts.push(block('Checks Performed', fields.checksPerformed));
+      parts.push(blockHtml('Checks Performed', fieldsHtml.checksPerformed));
     }
 
-    parts.push(block('Action Taken', fields.actionTaken));
+    parts.push(blockHtml('Action Taken', fieldsHtml.actionTaken));
 
     if (fields.resolutionStatus) {
       parts.push(inline('Resolution', fields.resolutionStatus));
       const meta = getResolutionExplanationMeta(fields.resolutionStatus);
       if (meta && fields.resolutionExplanation) {
-        parts.push(block(meta.blockTitle, fields.resolutionExplanation));
+        parts.push(blockHtml(meta.blockTitle, fieldsHtml.resolutionExplanation));
       }
     }
 
     if (fields.status) {
       parts.push(inline('Status', fields.status));
       if (ESCALATION_STATUSES.has(fields.status) && fields.escalationReason) {
-        parts.push(block('Escalation reason', fields.escalationReason));
+        parts.push(blockHtml('Escalation reason', fieldsHtml.escalationReason));
       }
     }
 
     if (fields.additionalNotes) {
-      parts.push(block('Additional Notes', fields.additionalNotes));
+      parts.push(blockHtml('Additional Notes', fieldsHtml.additionalNotes));
     }
 
     if (currentUser?.name) {
@@ -876,18 +923,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      // Collect and validate
+      // Collect and validate. We keep two parallel views of each free-text
+      // field: `fields` (trimmed plain strings, used for required-field
+      // validation + truthiness checks) and `fieldsHtml` (HTML produced by
+      // the @-mention controller, used to compose the actual update body).
+      const fieldEls = {};
+      MENTION_FIELD_IDS.forEach((id) => {
+        fieldEls[id] = document.getElementById(id);
+      });
+
       const fields = {
-        problemDescription: document.getElementById('problemDescription').value.trim(),
-        expectedBehavior: document.getElementById('expectedBehavior').value.trim(),
-        checksPerformed: document.getElementById('checksPerformed').value.trim(),
-        actionTaken: document.getElementById('actionTaken').value.trim(),
+        problemDescription: fieldEls.problemDescription.value.trim(),
+        expectedBehavior: fieldEls.expectedBehavior.value.trim(),
+        checksPerformed: fieldEls.checksPerformed.value.trim(),
+        actionTaken: fieldEls.actionTaken.value.trim(),
         resolutionStatus: resolutionStatusSelect.value,
-        resolutionExplanation: resolutionExplanation.value.trim(),
+        resolutionExplanation: fieldEls.resolutionExplanation.value.trim(),
         status: statusSelect.value,
-        escalationReason: escalationReason.value.trim(),
-        additionalNotes: document.getElementById('additionalNotes').value.trim()
+        escalationReason: fieldEls.escalationReason.value.trim(),
+        additionalNotes: fieldEls.additionalNotes.value.trim()
       };
+
+      // Shared Set caps mention-chip emission at one per user across all
+      // fields, so Monday fires exactly one bell notification per mentioned
+      // user — even if @Gil appears in 3 different textareas.
+      const fieldsHtml = {};
+      const seenMentionedUserIds = new Set();
+      MENTION_FIELD_IDS.forEach((id) => {
+        fieldsHtml[id] = mentionController.serializeFieldToHtml(
+          fieldEls[id],
+          { seenUserIds: seenMentionedUserIds }
+        );
+      });
 
       if (!fields.problemDescription) return showError('Please provide a short description of the problem.');
       if (!fields.expectedBehavior) return showError('Please describe what is expected.');
@@ -907,7 +974,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('uploadProgress').style.display = 'block';
       updateProgress(10, 'Preparing update...');
 
-      const body = buildUpdateBody(fields);
+      const body = buildUpdateBody(fields, fieldsHtml);
 
       // Store attachments in local storage (message size limit workaround)
       if (attachedFiles.length > 0) {
@@ -994,14 +1061,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearFoundItem();
     refreshFindBtnState();
 
-    // Clear text fields
-    document.getElementById('problemDescription').value = '';
-    document.getElementById('expectedBehavior').value = '';
-    document.getElementById('checksPerformed').value = '';
-    document.getElementById('actionTaken').value = '';
-    document.getElementById('additionalNotes').value = '';
-    resolutionExplanation.value = '';
-    escalationReason.value = '';
+    // Clear text fields and reset their @-mention registries so leftover
+    // mention offsets from the previous ticket don't bleed into the next one.
+    MENTION_FIELD_IDS.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.value = '';
+        mentionController.clear(el);
+      }
+    });
+    mentionController.hidePopup();
 
     // Reset selects + conditional fields
     resolutionStatusSelect.value = '';
