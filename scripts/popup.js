@@ -169,10 +169,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       const term = searchTerm.toLowerCase();
       filteredBugs = allBugs.filter(bug => {
         const title = bug.name ? bug.name.toLowerCase() : '';
-        const statusColumn = bug.column_values?.find(col => col.id === 'status');
-        const status = statusColumn ? statusColumn.text.toLowerCase() : '';
+        const statusColumn = bug.column_values?.find(col => 
+          col.column?.title?.toLowerCase() === 'status' || 
+          (col.column?.type === 'color' && col.column?.title?.toLowerCase().includes('status'))
+        );
+        const status = (statusColumn && statusColumn.text) ? statusColumn.text.toLowerCase() : '';
         const date = new Date(bug.created_at).toLocaleDateString().toLowerCase();
-        
         return title.includes(term) || status.includes(term) || date.includes(term);
       });
     }
@@ -213,25 +215,121 @@ document.addEventListener('DOMContentLoaded', async () => {
       const date = new Date(bug.created_at);
       const dateStr = date.toLocaleDateString();
       
-      // Find status column
-      const statusColumn = bug.column_values.find(col => col.id === 'status');
-      const statusText = statusColumn ? statusColumn.text : 'Unknown';
+      // Find status column by title (case-insensitive) or by type "color" (which is Monday's status column type)
+      const statusColumn = bug.column_values.find(col => 
+        col.column?.title?.toLowerCase() === 'status' || 
+        (col.column?.type === 'color' && col.column?.title?.toLowerCase().includes('status'))
+      );
+      const statusText = (statusColumn && statusColumn.text) ? statusColumn.text : 'Unknown';
       
-      meta.innerHTML = `
-        <span class="bug-status">${statusText}</span>
-        <span class="bug-date">${dateStr}</span>
-      `;
+      // Extract color from Monday.com status column
+      const statusColor = getStatusColor(statusColumn);
+      
+      const statusSpan = document.createElement('span');
+      statusSpan.className = 'bug-status';
+      statusSpan.textContent = statusText;
+      
+      // Apply color styling if available
+      if (statusColor) {
+        statusSpan.style.backgroundColor = statusColor.background;
+        statusSpan.style.borderColor = statusColor.border;
+        statusSpan.style.color = statusColor.text;
+      }
+      
+      const dateSpan = document.createElement('span');
+      dateSpan.className = 'bug-date';
+      dateSpan.textContent = dateStr;
+      
+      meta.appendChild(statusSpan);
+      meta.appendChild(dateSpan);
       
       bugItem.appendChild(title);
       bugItem.appendChild(meta);
       
       bugItem.addEventListener('click', () => {
-        // Open Monday item in new tab (construct URL)
-        const mondayUrl = `https://monday.com/boards/${bug.board_id}/pulses/${bug.id}`;
-        chrome.tabs.create({ url: mondayUrl });
+        // Open Monday item in new tab using the URL from the API
+        chrome.tabs.create({ url: bug.url });
       });
       
       bugsList.appendChild(bugItem);
     });
+  }
+
+  /**
+   * Extract color information from a Monday.com status column
+   * @param {Object} statusColumn - The column_values entry for the status column
+   * @returns {Object|null} - { background, border, text } colors or null if not available
+   */
+  function getStatusColor(statusColumn) {
+    if (!statusColumn || !statusColumn.value || !statusColumn.column?.settings_str) {
+      return null;
+    }
+
+    try {
+      // Parse the status value to get the index
+      const statusValue = JSON.parse(statusColumn.value);
+      const statusIndex = statusValue.index;
+      
+      if (statusIndex === undefined || statusIndex === null) {
+        return null;
+      }
+      const settings = JSON.parse(statusColumn.column.settings_str);
+      const labelsColors = settings.labels_colors || {};
+      const colorInfo = labelsColors[statusIndex.toString()];
+      
+      if (!colorInfo || !colorInfo.color) {
+        return null;
+      }
+
+      // Return the colors - Monday provides background color and border color
+      // We need to determine text color based on background brightness
+      const bgColor = colorInfo.color;
+      const borderColor = colorInfo.border || darkenColor(bgColor, 15);
+      const textColor = getContrastTextColor(bgColor);
+
+      return {
+        background: bgColor,
+        border: borderColor,
+        text: textColor
+      };
+    } catch (e) {
+      console.warn('Failed to parse status color:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Determine whether to use dark or light text based on background color brightness
+   * @param {string} hexColor - Hex color code (e.g., "#fdab3d")
+   * @returns {string} - "#333" for dark text or "#fff" for light text
+   */
+  function getContrastTextColor(hexColor) {
+    const hex = hexColor.replace('#', '');
+    
+    // Parse RGB values
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+    
+    // Calculate relative luminance using sRGB formula
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    
+    // Use dark text for light backgrounds, light text for dark backgrounds
+    return luminance > 0.5 ? '#333' : '#fff';
+  }
+
+  /**
+   * Darken a hex color by a percentage
+   * @param {string} hexColor - Hex color code
+   * @param {number} percent - Percentage to darken (0-100)
+   * @returns {string} - Darkened hex color
+   */
+  function darkenColor(hexColor, percent) {
+    const hex = hexColor.replace('#', '');
+    const r = Math.max(0, parseInt(hex.substr(0, 2), 16) - Math.round(2.55 * percent));
+    const g = Math.max(0, parseInt(hex.substr(2, 2), 16) - Math.round(2.55 * percent));
+    const b = Math.max(0, parseInt(hex.substr(4, 2), 16) - Math.round(2.55 * percent));
+    
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
   }
 });

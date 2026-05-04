@@ -176,16 +176,22 @@ export class MondayAPI {
       query ($boardId: [ID!]!, $limit: Int!) {
         boards(ids: $boardId) {
           groups(ids: ["${groupId}"]) {
-            items_page(limit: $limit) {
+            items_page(limit: $limit, query_params: { order_by: [{column_id: "__creation_log__", direction: desc}] }) {
               items {
                 id
                 name
+                url
                 created_at
                 updated_at
                 column_values {
                   id
                   text
                   value
+                  column {
+                    title
+                    type
+                    settings_str
+                  }
                 }
               }
             }
