@@ -945,8 +945,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
 
       // Shared Set caps mention-chip emission at one per user across all
-      // fields, so Monday fires exactly one bell notification per mentioned
-      // user — even if @Gil appears in 3 different textareas.
+      // fields, so the rendered update only shows one chip per user — even
+      // if @Gil appears in 3 different textareas. The same Set is also our
+      // source of truth for the `mentions_list` we send to Monday: chip
+      // markup in the body alone does NOT fire bell notifications via the
+      // API, so we forward the deduped user IDs explicitly so Monday's
+      // notification pipeline picks them up.
       const fieldsHtml = {};
       const seenMentionedUserIds = new Set();
       MENTION_FIELD_IDS.forEach((id) => {
@@ -955,6 +959,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           { seenUserIds: seenMentionedUserIds }
         );
       });
+
+      const mentionsList = Array.from(seenMentionedUserIds)
+        .map((id) => {
+          const numericId = parseInt(id);
+          return Number.isFinite(numericId) ? { id: String(numericId), type: 'User' } : null;
+        })
+        .filter(Boolean);
 
       if (!fields.problemDescription) return showError('Please provide a short description of the problem.');
       if (!fields.expectedBehavior) return showError('Please describe what is expected.');
@@ -989,6 +1000,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         itemUrl: selectedItem.url,
         boardId: boardSelect.value,
         body,
+        mentionsList,
         resolutionStatus: fields.resolutionStatus || null,
         status: fields.status || null,
         personId: currentUser?.id ? parseInt(currentUser.id) : null,

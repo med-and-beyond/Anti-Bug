@@ -797,22 +797,74 @@ export class MondayAPI {
     return { labels: active, columnId: target.id, columnType: target.type };
   }
 
-  async addUpdateToItem(itemId, body) {
+  async addUpdateToItem(itemId, body, mentionsList = null) {
+    // Monday's API does NOT reliably fire bell notifications for users that
+    // are mentioned only via inline mention-chip HTML in the update body.
+    // The `mentions_list` argument (added in API version 2025-07) is what
+    // tells Monday's notification pipeline who to notify, so we forward the
+    // collected user IDs here whenever the caller provides them.
+    //
+    // Each entry must shape up to Monday's `UpdateMention` input type:
+    //   { id: ID!, type: MentionType! }   // type ∈ User | Team | Board | Project
+    const ALLOWED_MENTION_TYPES = new Set(['User', 'Team', 'Board', 'Project']);
+    const validMentions = Array.isArray(mentionsList)
+      ? mentionsList
+          .map((m) => {
+            if (!m || m.id == null) return null;
+            const id = String(m.id);
+            const type = typeof m.type === 'string' ? m.type : 'User';
+            if (!id || !ALLOWED_MENTION_TYPES.has(type)) return null;
+            return { id, type };
+          })
+          .filter(Boolean)
+      : [];
+
+    if (validMentions.length === 0) {
+      const mutation = `
+        mutation ($itemId: ID!, $body: String!) {
+          create_update(
+            item_id: $itemId,
+            body: $body
+          ) {
+            id
+          }
+        }
+      `;
+
+      const data = await this.query(mutation, {
+        itemId: itemId,
+        body: body
+      });
+
+      return data.create_update;
+    }
+
     const mutation = `
-      mutation ($itemId: ID!, $body: String!) {
+      mutation ($itemId: ID!, $body: String!, $mentionsList: [UpdateMention!]!) {
         create_update(
           item_id: $itemId,
-          body: $body
+          body: $body,
+          mentions_list: $mentionsList
         ) {
           id
         }
       }
     `;
 
-    const data = await this.query(mutation, {
-      itemId: itemId,
-      body: body
-    });
+    console.log(
+      `addUpdateToItem: posting update with ${validMentions.length} mention(s):`,
+      validMentions
+    );
+
+    const data = await this.query(
+      mutation,
+      {
+        itemId: itemId,
+        body: body,
+        mentionsList: validMentions
+      },
+      { apiVersion: '2025-07' }
+    );
 
     return data.create_update;
   }

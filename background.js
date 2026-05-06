@@ -502,6 +502,7 @@ async function handleUpdateBugCase(message, sendResponse) {
     itemId,
     boardId,
     body,
+    mentionsList,
     resolutionStatus,
     status,
     personId,
@@ -525,14 +526,14 @@ async function handleUpdateBugCase(message, sendResponse) {
 
     mondayAPI.setToken(settings.mondayToken);
 
-    // 1. Post the update body. Bell notifications for any @-mentions are
-    //    fired automatically by Monday when its body parser sees the native
-    //    chip markup we emit — see `renderMentionMarkup` in
-    //    scripts/mention-autocomplete.js.
+    // 1. Post the update body. Mention-chip HTML in the body alone does NOT
+    //    reliably fire Monday's bell notifications via the API, so we also
+    //    forward the deduped `mentions_list` (collected in update-bug.js)
+    //    which is what Monday's notification pipeline actually reads.
     if (body) {
       console.log('Posting update to item...');
       try {
-        await mondayAPI.addUpdateToItem(itemId, body);
+        await mondayAPI.addUpdateToItem(itemId, body, mentionsList || null);
         console.log('Update posted successfully.');
       } catch (updateError) {
         console.error('Failed to post update:', updateError);
