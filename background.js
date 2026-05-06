@@ -118,23 +118,23 @@ async function handleCaptureScreenshot(message, sendResponse) {
 }
 
 async function handleCreateBug(message, sendResponse) {
-  const { bugData, attachmentCount, columnValues } = message;
-  
+  const { bugData, attachmentCount, columnValues, bodyHtml, mentionsList } = message;
+
   try {
     console.log(`Creating bug with ${attachmentCount} attachments...`);
-    
+
     const settings = await chrome.storage.sync.get(['mondayToken', 'selectedBoardId', 'selectedGroupId']);
-    
+
     if (!settings.mondayToken) {
       sendResponse({ success: false, error: 'Monday.com not connected' });
       return;
     }
-    
+
     if (!settings.selectedBoardId || !settings.selectedGroupId) {
       sendResponse({ success: false, error: 'Please select a board and group in settings' });
       return;
     }
-    
+
     // Retrieve attachments from local storage (avoids message size limit)
     let attachments = [];
     if (attachmentCount > 0) {
@@ -142,16 +142,22 @@ async function handleCreateBug(message, sendResponse) {
       attachments = storage.pendingAttachments || [];
       console.log(`Retrieved ${attachments.length} attachments from storage`);
     }
-    
+
     mondayAPI.setToken(settings.mondayToken);
-    
-    // Create the bug item with attachments first
+
+    // Create the bug item with attachments first. When the page provides a
+    // pre-rendered HTML body (with @-mention chips inline) and a deduped
+    // mentions_list, route them through createBugItem → addUpdateToItem so
+    // Monday's notification pipeline fires bell notifications for the
+    // mentioned users. Without these, mention-chip HTML alone is not
+    // enough — Monday only notifies based on `mentions_list`.
     console.log(`Creating bug item with ${attachments.length} attachments...`);
     const item = await mondayAPI.createBugItem(
       settings.selectedBoardId,
       settings.selectedGroupId,
       bugData,
-      attachments
+      attachments,
+      { bodyHtml: bodyHtml || null, mentionsList: mentionsList || null }
     );
     
     console.log('Bug creation complete:', item);

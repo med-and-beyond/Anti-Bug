@@ -437,10 +437,10 @@ export class MondayAPI {
     return data.change_multiple_column_values;
   }
 
-  async createBugItem(boardId, groupId, bugData, attachments = []) {
+  async createBugItem(boardId, groupId, bugData, attachments = [], options = {}) {
     // Create the item with the Title field as the item name
     const bugTitle = bugData.title || bugData.description || 'New Bug';
-    
+
     const createQuery = `
       mutation ($boardId: ID!, $groupId: String!, $itemName: String!) {
         create_item(
@@ -463,9 +463,17 @@ export class MondayAPI {
 
     const item = result.create_item;
 
-    // Add bug details as an update (post)
+    // Add bug details as an update (post). When the caller pre-builds an
+    // HTML body (e.g. because the form supports @-mentions), route through
+    // addUpdateToItem so we can forward `mentions_list` — the only reliable
+    // way to fire bell notifications via Monday's API. Otherwise fall back
+    // to the legacy plain-text formatter.
     try {
-      await this.addBugDetailsUpdate(item.id, bugData);
+      if (options && typeof options.bodyHtml === 'string' && options.bodyHtml.trim()) {
+        await this.addUpdateToItem(item.id, options.bodyHtml, options.mentionsList || null);
+      } else {
+        await this.addBugDetailsUpdate(item.id, bugData);
+      }
     } catch (error) {
       console.error('Failed to add bug details:', error);
       // Continue anyway - item was created
