@@ -1238,11 +1238,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.log('Sending message to background...');
 
       // Create bug via background script
-      // Send only metadata, not the actual file data
+      // Send only metadata, not the actual file data.
+      // Forward the form's board/group so this submission targets exactly
+      // what the user picked — the saved Default configuration is reserved
+      // for updating existing bug cases (see Settings → Bug Lists).
       chrome.runtime.sendMessage(
         {
           action: 'createBug',
           bugData: bugData,
+          boardId: boardId,
+          groupId: groupId,
           attachmentCount: attachedFiles.length,
           columnValues: columnValues,
           bodyHtml: bodyHtml,

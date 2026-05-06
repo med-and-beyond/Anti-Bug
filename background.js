@@ -118,20 +118,23 @@ async function handleCaptureScreenshot(message, sendResponse) {
 }
 
 async function handleCreateBug(message, sendResponse) {
-  const { bugData, attachmentCount, columnValues, bodyHtml, mentionsList } = message;
+  const { bugData, boardId, groupId, attachmentCount, columnValues, bodyHtml, mentionsList } = message;
 
   try {
     console.log(`Creating bug with ${attachmentCount} attachments...`);
 
-    const settings = await chrome.storage.sync.get(['mondayToken', 'selectedBoardId', 'selectedGroupId']);
+    const settings = await chrome.storage.sync.get(['mondayToken']);
 
     if (!settings.mondayToken) {
       sendResponse({ success: false, error: 'Monday.com not connected' });
       return;
     }
 
-    if (!settings.selectedBoardId || !settings.selectedGroupId) {
-      sendResponse({ success: false, error: 'Please select a board and group in settings' });
+    // The create-bug form forwards the user's board/group selection. The
+    // saved Default configuration is reserved for updating existing bug
+    // cases — for new bug reports we always use what the user picked.
+    if (!boardId || !groupId) {
+      sendResponse({ success: false, error: 'Please select a board and group on the form' });
       return;
     }
 
@@ -151,10 +154,10 @@ async function handleCreateBug(message, sendResponse) {
     // Monday's notification pipeline fires bell notifications for the
     // mentioned users. Without these, mention-chip HTML alone is not
     // enough — Monday only notifies based on `mentions_list`.
-    console.log(`Creating bug item with ${attachments.length} attachments...`);
+    console.log(`Creating bug item with ${attachments.length} attachments on board ${boardId}, group ${groupId}...`);
     const item = await mondayAPI.createBugItem(
-      settings.selectedBoardId,
-      settings.selectedGroupId,
+      boardId,
+      groupId,
       bugData,
       attachments,
       { bodyHtml: bodyHtml || null, mentionsList: mentionsList || null }
@@ -165,7 +168,7 @@ async function handleCreateBug(message, sendResponse) {
     
     // Fetch board columns to find default value column IDs
     console.log('Fetching board columns for updates...');
-    const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
+    const columns = await mondayAPI.fetchBoardColumns(boardId);
     
     // Find columns that need forced defaults
     const defaultColumns = {};
@@ -211,7 +214,7 @@ async function handleCreateBug(message, sendResponse) {
     if (Object.keys(forcedDefaults).length > 0) {
       try {
         await mondayAPI.updateColumnValues(
-          settings.selectedBoardId,
+          boardId,
           item.id,
           forcedDefaults
         );
@@ -247,7 +250,7 @@ async function handleCreateBug(message, sendResponse) {
             const labelValue = mondayAPI.findLabelValue(columnMeta.settings, columnValue.label || columnValue);
             if (labelValue) {
               await mondayAPI.updateColumnValues(
-                settings.selectedBoardId,
+                boardId,
                 item.id,
                 { [columnId]: labelValue }
               );
@@ -266,7 +269,7 @@ async function handleCreateBug(message, sendResponse) {
           // Handle other columns normally
           else {
             await mondayAPI.updateColumnValues(
-              settings.selectedBoardId,
+              boardId,
               item.id,
               { [columnId]: columnValue }
             );
