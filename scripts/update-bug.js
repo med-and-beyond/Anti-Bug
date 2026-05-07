@@ -9,6 +9,9 @@ let boardTags = []; // all tags available on the current board: [{id, name, colo
 let boardTagsForBoardId = null; // boardId that boardTags was fetched for
 let boardResolutionLabels = []; // active labels for the "Resolution status" column
 let boardResolutionLabelsForBoardId = null;
+let boardStatusLabels = []; // active labels for the "Status" column
+let boardStatusLabelsForBoardId = null;
+let boardStatusColumnId = null; // null when the board has no "Status" column at all
 const selectedTagIds = new Set(); // numeric tag IDs the user selected to ADD (on top of existing)
 const selectedTagMap = new Map(); // id -> { name, color } for rendering chips
 let activeSuggestionIndex = -1;
@@ -29,14 +32,20 @@ const MENTION_FIELD_IDS = [
   'additionalNotes'
 ];
 
-const ESCALATION_STATUSES = new Set([
-  'Pending dev',
-  'Pending CS',
-  'Pending code fix',
-  'Pending Data',
-  'Waiting for Product',
-  'Move to Finance'
-]);
+// The "Status" dropdown is populated from the board's active labels at runtime
+// (see loadStatusLabels), so renaming/adding/deactivating a label in Monday
+// flows through automatically. The escalation rule below intentionally keys
+// off the *one* baseline label (Tech Support owns the ticket) instead of an
+// allow-list of escalation names — that way a rename like
+// "Move to Finance" → "Pending Finance" still triggers the escalation reason
+// textarea without code changes. If the baseline label itself is ever
+// renamed, update this constant to match the new Monday label.
+const BASELINE_STATUS_NAME = 'Pending TechSupport';
+
+function requiresEscalationReason(statusValue) {
+  if (!statusValue) return false;
+  return statusValue.trim().toLowerCase() !== BASELINE_STATUS_NAME.toLowerCase();
+}
 
 // Resolution-status values that should show an explanation textarea, with the
 // per-status label/placeholder/error/update-section copy. Anything not listed
@@ -158,22 +167,25 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   boardSelect.addEventListener('change', () => {
     clearFoundItem();
-    // Reset tag + resolution-label caches when changing boards. The dropdown
-    // itself is hidden by clearFoundItem(), and the form is only re-shown by
-    // selectItem() (which awaits loadResolutionStatusLabels and re-renders),
-    // so we don't need to repaint the <select> here.
+    // Reset tag + status/resolution caches when changing boards. Both
+    // <select>s are repainted by selectItem() (which awaits the loaders and
+    // calls render*Options), so we don't need to repaint them here.
     boardTags = [];
     boardTagsForBoardId = null;
     boardResolutionLabels = [];
     boardResolutionLabelsForBoardId = null;
+    boardStatusLabels = [];
+    boardStatusLabelsForBoardId = null;
+    boardStatusColumnId = null;
     selectedTagIds.clear();
     selectedTagMap.clear();
     refreshFindBtnState();
-    // Persist selection and preload board tags + resolution labels in the background
+    // Persist selection and preload tags + resolution + status labels in the background
     if (boardSelect.value) {
       chrome.storage.sync.set({ selectedBoardId: boardSelect.value });
       loadBoardTags(boardSelect.value);
       loadResolutionStatusLabels(boardSelect.value);
+      loadStatusLabels(boardSelect.value);
     }
   });
 
@@ -205,11 +217,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  statusSelect.addEventListener('change', () => {
-    const needsReason = ESCALATION_STATUSES.has(statusSelect.value);
+  statusSelect.addEventListener('change', applyEscalationVisibility);
+
+  function applyEscalationVisibility() {
+    const needsReason = requiresEscalationReason(statusSelect.value);
     escalationGroup.style.display = needsReason ? 'block' : 'none';
     if (!needsReason) escalationReason.value = '';
-  });
+  }
 
   // Tag input - autocomplete against existing board tags
   tagInput.addEventListener('input', () => {
@@ -337,9 +351,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const saved = await chrome.storage.sync.get(['selectedBoardId']);
             if (saved.selectedBoardId) {
               boardSelect.value = saved.selectedBoardId;
-              // Preload board tags + resolution-status labels for the persisted board
+              // Preload tags + resolution + status labels for the persisted board
               loadBoardTags(saved.selectedBoardId);
               loadResolutionStatusLabels(saved.selectedBoardId);
+              loadStatusLabels(saved.selectedBoardId);
             }
 
             boardSelect.disabled = false;
@@ -519,12 +534,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateFieldsSection.style.display = 'block';
     submitBtn.disabled = false;
 
+    // Collect missing-column problems and surface them in one banner at the
+    // end so the user gets a single, actionable message even when more than
+    // one optional column is absent.
+    const missingColumnNotices = [];
+
     const descCol = findDescriptionColumn(item);
     if (!descCol) {
       bugDescriptionGroup.style.display = 'none';
       bugDescriptionDisplay.textContent = '';
       bugDescriptionDisplay.classList.remove('is-empty');
-      showError('This board has no "Description" column, so the bug case description cannot be displayed.');
+      missingColumnNotices.push(
+        '"Description" column is missing — the bug case description cannot be displayed.'
+      );
     } else {
       const text = (descCol.text || '').trim();
       bugDescriptionDisplay.textContent = text || '(No description provided)';
@@ -532,10 +554,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       bugDescriptionGroup.style.display = 'block';
     }
 
-    // Make sure board tags + resolution labels are available; then render chips + enable input
+    // Make sure board tags + resolution + status labels are available; then
+    // render chips/options + enable inputs.
     await Promise.all([
       loadBoardTags(boardSelect.value),
-      loadResolutionStatusLabels(boardSelect.value)
+      loadResolutionStatusLabels(boardSelect.value),
+      loadStatusLabels(boardSelect.value)
     ]);
     tagInput.disabled = boardTags.length === 0;
     if (boardTags.length === 0) {
@@ -544,6 +568,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       tagInput.placeholder = 'Start typing to search existing tags...';
     }
     renderTags();
+
+    // Status column is optional (warn-only): the form still submits and other
+    // fields (resolution, tags, owner, attachments, free-text update) can
+    // still be saved. We only block the Status select itself.
+    if (boardStatusColumnId === null) {
+      missingColumnNotices.push(
+        '"Status" column is missing — the Status field cannot be updated.'
+      );
+      statusSelect.disabled = true;
+    } else {
+      statusSelect.disabled = false;
+    }
+
+    if (missingColumnNotices.length > 0) {
+      showError(`This board is missing required columns. ${missingColumnNotices.join(' ')}`);
+    }
   }
 
   function extractTagIds(item) {
@@ -658,6 +698,74 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     applyResolutionExplanationVisibility();
+  }
+
+  // ===== Status labels =====
+  // Mirrors the Resolution-status loader: re-fetch on each board change so
+  // adds/renames/deactivations of Status labels in Monday flow into the
+  // dropdown without code changes (the example renaming
+  // "Move to Finance" → "Pending Finance" is exactly this case).
+
+  async function loadStatusLabels(boardId) {
+    if (!boardId) return;
+    if (boardStatusLabelsForBoardId === boardId) return; // cached for this board
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { action: 'fetchActiveStatusLabels', boardId, columnTitle: 'Status' },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            console.warn(
+              'Failed to load Status labels:',
+              response?.error || chrome.runtime.lastError?.message
+            );
+            boardStatusLabels = [];
+            boardStatusColumnId = null;
+          } else {
+            boardStatusLabels = Array.isArray(response.labels) ? response.labels : [];
+            boardStatusColumnId = response.columnId || null;
+            console.log(
+              `Loaded ${boardStatusLabels.length} active "Status" label(s):`,
+              boardStatusLabels.map(l => l.name)
+            );
+          }
+          boardStatusLabelsForBoardId = boardId;
+          renderStatusOptions();
+          resolve();
+        }
+      );
+    });
+  }
+
+  function renderStatusOptions() {
+    const previousValue = statusSelect.value;
+
+    statusSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Leave unchanged --';
+    statusSelect.appendChild(placeholder);
+
+    // Append "(escalation)" hint for any label that isn't the baseline so the
+    // user knows up-front that picking it requires a justification. The hint
+    // text is purely cosmetic — the option's `value` stays exactly equal to
+    // the label name from Monday so the column update keeps matching.
+    boardStatusLabels.forEach(lbl => {
+      const opt = document.createElement('option');
+      opt.value = lbl.name;
+      opt.textContent = requiresEscalationReason(lbl.name)
+        ? `${lbl.name} (escalation)`
+        : lbl.name;
+      statusSelect.appendChild(opt);
+    });
+
+    if (previousValue && boardStatusLabels.some(l => l.name === previousValue)) {
+      statusSelect.value = previousValue;
+    } else {
+      statusSelect.value = '';
+    }
+
+    applyEscalationVisibility();
   }
 
   function existingTagIdSet() {
@@ -899,7 +1007,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (fields.status) {
       parts.push(inline('Status', fields.status));
-      if (ESCALATION_STATUSES.has(fields.status) && fields.escalationReason) {
+      if (requiresEscalationReason(fields.status) && fields.escalationReason) {
         parts.push(blockHtml('Escalation reason', fieldsHtml.escalationReason));
       }
     }
@@ -975,7 +1083,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (resolutionMeta && !fields.resolutionExplanation) {
         return showError(resolutionMeta.error);
       }
-      if (ESCALATION_STATUSES.has(fields.status) && !fields.escalationReason) {
+      if (requiresEscalationReason(fields.status) && !fields.escalationReason) {
         return showError('Please explain why escalation is needed.');
       }
 
