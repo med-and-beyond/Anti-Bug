@@ -9,9 +9,9 @@ let boardTags = []; // all tags available on the current board: [{id, name, colo
 let boardTagsForBoardId = null; // boardId that boardTags was fetched for
 let boardResolutionLabels = []; // active labels for the "Resolution status" column
 let boardResolutionLabelsForBoardId = null;
-let boardStatusLabels = []; // active labels for the "Status" column
+let boardStatusLabels = []; // active labels for the "Resolution owner" column
 let boardStatusLabelsForBoardId = null;
-let boardStatusColumnId = null; // null when the board has no "Status" column at all
+let boardStatusColumnId = null; // null when the board has no "Resolution owner" column at all
 const selectedTagIds = new Set(); // numeric tag IDs the user selected to ADD (on top of existing)
 const selectedTagMap = new Map(); // id -> { name, color } for rendering chips
 let activeSuggestionIndex = -1;
@@ -32,7 +32,7 @@ const MENTION_FIELD_IDS = [
   'additionalNotes'
 ];
 
-// The "Status" dropdown is populated from the board's active labels at runtime
+// The "Resolution owner" dropdown is populated from the board's active labels at runtime
 // (see loadStatusLabels), so renaming/adding/deactivating a label in Monday
 // flows through automatically. The escalation rule below intentionally keys
 // off the *one* baseline label (Tech Support owns the ticket) instead of an
@@ -569,12 +569,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     renderTags();
 
-    // Status column is optional (warn-only): the form still submits and other
-    // fields (resolution, tags, owner, attachments, free-text update) can
-    // still be saved. We only block the Status select itself.
+    // Resolution owner column is optional (warn-only): the form still submits
+    // and other fields (resolution, tags, owner, attachments, free-text update)
+    // can still be saved. We only block the Resolution owner select itself.
     if (boardStatusColumnId === null) {
       missingColumnNotices.push(
-        '"Status" column is missing — the Status field cannot be updated.'
+        '"Resolution owner" column is missing — the Resolution owner field cannot be updated.'
       );
       statusSelect.disabled = true;
     } else {
@@ -700,10 +700,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyResolutionExplanationVisibility();
   }
 
-  // ===== Status labels =====
+  // ===== Resolution owner labels =====
   // Mirrors the Resolution-status loader: re-fetch on each board change so
-  // adds/renames/deactivations of Status labels in Monday flow into the
-  // dropdown without code changes (the example renaming
+  // adds/renames/deactivations of Resolution owner labels in Monday flow into
+  // the dropdown without code changes (the example renaming
   // "Move to Finance" → "Pending Finance" is exactly this case).
 
   async function loadStatusLabels(boardId) {
@@ -712,11 +712,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(
-        { action: 'fetchActiveStatusLabels', boardId, columnTitle: 'Status' },
+        { action: 'fetchActiveStatusLabels', boardId, columnTitle: 'Resolution owner' },
         (response) => {
           if (chrome.runtime.lastError || !response || !response.success) {
             console.warn(
-              'Failed to load Status labels:',
+              'Failed to load Resolution owner labels:',
               response?.error || chrome.runtime.lastError?.message
             );
             boardStatusLabels = [];
@@ -725,7 +725,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             boardStatusLabels = Array.isArray(response.labels) ? response.labels : [];
             boardStatusColumnId = response.columnId || null;
             console.log(
-              `Loaded ${boardStatusLabels.length} active "Status" label(s):`,
+              `Loaded ${boardStatusLabels.length} active "Resolution owner" label(s):`,
               boardStatusLabels.map(l => l.name)
             );
           }
@@ -1006,7 +1006,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (fields.status) {
-      parts.push(inline('Status', fields.status));
+      parts.push(inline('Resolution owner', fields.status));
       if (requiresEscalationReason(fields.status) && fields.escalationReason) {
         parts.push(blockHtml('Escalation reason', fieldsHtml.escalationReason));
       }

@@ -476,7 +476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       'Link to PR',
       'Custom AI prompt',
       'QA Item Created',
-      'Status',
+      'Resolution owner',
       'Bug/Feature',
       'Bug Status',
       'Environment',

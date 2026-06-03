@@ -173,7 +173,7 @@ async function handleCreateBug(message, sendResponse) {
     // Find columns that need forced defaults
     const defaultColumns = {};
     columns.forEach(col => {
-      if (col.title === 'Status') {
+      if (col.title === 'Resolution owner') {
         defaultColumns.status = { id: col.id, type: col.type, settings: col.settings };
       } else if (col.title === 'Bug/Feature') {
         defaultColumns.bugFeature = { id: col.id, type: col.type, settings: col.settings };
@@ -190,7 +190,7 @@ async function handleCreateBug(message, sendResponse) {
       const statusValue = mondayAPI.findLabelValue(defaultColumns.status.settings, 'Ready for Development');
       if (statusValue) {
         forcedDefaults[defaultColumns.status.id] = statusValue;
-        console.log('✓ Forcing Status to "Ready for Development"');
+        console.log('✓ Forcing Resolution owner to "Ready for Development"');
       }
     }
     
@@ -560,7 +560,7 @@ async function handleUpdateBugCase(message, sendResponse) {
     );
 
     const resolutionColumn = findColumn('Resolution status');
-    const statusColumn = findColumn('Status');
+    const statusColumn = findColumn('Resolution owner');
     const ownerColumn = findColumn('Tech support owner');
     const tagsColumn = findColumn('Tags Tech Support');
 
@@ -601,7 +601,7 @@ async function handleUpdateBugCase(message, sendResponse) {
           value: labelValue
         });
       } else {
-        console.warn(`Status label "${status}" not found on board`);
+        console.warn(`Resolution owner label "${status}" not found on board`);
       }
     }
 
