@@ -392,7 +392,7 @@ async function handleFetchBoardColumns(message, sendResponse) {
 }
 
 async function handleFetchBoardTags(message, sendResponse) {
-  const { boardId } = message;
+  const { boardId, columnTitle } = message;
   try {
     const settings = await chrome.storage.sync.get(['mondayToken']);
     if (!settings.mondayToken) {
@@ -404,7 +404,9 @@ async function handleFetchBoardTags(message, sendResponse) {
       return;
     }
     mondayAPI.setToken(settings.mondayToken);
-    const result = await mondayAPI.fetchBoardTags(boardId);
+    const result = columnTitle
+      ? await mondayAPI.fetchBoardTags(boardId, columnTitle)
+      : await mondayAPI.fetchBoardTags(boardId);
     sendResponse({
       success: true,
       tags: result.tags || [],
@@ -517,6 +519,10 @@ async function handleUpdateBugCase(message, sendResponse) {
     personId,
     tagIdsToAdd,
     existingTagIds,
+    domainIds,
+    escalationReasonIds,
+    rootCause,
+    impact,
     attachmentCount
   } = message;
 
@@ -555,14 +561,29 @@ async function handleUpdateBugCase(message, sendResponse) {
     console.log('Fetching board columns...');
     const columns = await mondayAPI.fetchBoardColumns(boardId);
 
-    const findColumn = (title) => columns.find(col =>
-      col.title && col.title.toLowerCase() === title.toLowerCase()
-    );
+    // Some boards have more than one column sharing a title (e.g. a legacy
+    // "Impact" dropdown alongside the newer "Impact" status column). When a
+    // preferred type is supplied we match that type first, then fall back to
+    // the first title match for older boards that only have one.
+    const findColumn = (title, preferType) => {
+      const matches = columns.filter(col =>
+        col.title && col.title.toLowerCase() === title.toLowerCase()
+      );
+      if (preferType) {
+        const typed = matches.find(col => col.type === preferType);
+        if (typed) return typed;
+      }
+      return matches[0];
+    };
 
     const resolutionColumn = findColumn('Resolution status');
     const statusColumn = findColumn('Resolution owner');
     const ownerColumn = findColumn('Tech support owner');
     const tagsColumn = findColumn('Tags Tech Support');
+    const domainColumn = findColumn('Domain', 'dropdown');
+    const escalationReasonColumn = findColumn('Escalation Reason', 'dropdown');
+    const rootCauseColumn = findColumn('Root Cause', 'status');
+    const impactColumn = findColumn('Impact', 'status');
 
     // 3. Build per-column updates (applied one-by-one for resilience)
     const columnUpdates = [];
@@ -632,6 +653,46 @@ async function handleUpdateBugCase(message, sendResponse) {
         value: tagValue
       });
     }
+
+    // 4b. Dropdown selections (Domain, Escalation Reason) — multi-select, written
+    //     by label id. The user's selection already includes any existing values
+    //     it wishes to keep, so we send the full set as the new value.
+    const pushDropdownIds = (column, ids) => {
+      if (!column || !Array.isArray(ids)) return;
+      const numericIds = ids
+        .map(id => parseInt(id))
+        .filter(id => !Number.isNaN(id));
+      if (numericIds.length === 0) return;
+      columnUpdates.push({
+        columnId: column.id,
+        columnTitle: column.title,
+        value: { ids: numericIds }
+      });
+    };
+
+    pushDropdownIds(domainColumn, domainIds);
+    // Escalation Reason is only relevant when the ticket is being escalated.
+    if (status && status.trim().toLowerCase() !== 'pending techsupport') {
+      pushDropdownIds(escalationReasonColumn, escalationReasonIds);
+    }
+
+    // 4c. Status selections (Root Cause, Impact) — single-select label by name.
+    const pushStatusLabel = (column, label) => {
+      if (!column || !label) return;
+      const labelValue = mondayAPI.findLabelValue(column.settings, label);
+      if (labelValue) {
+        columnUpdates.push({
+          columnId: column.id,
+          columnTitle: column.title,
+          value: labelValue
+        });
+      } else {
+        console.warn(`"${column.title}" label "${label}" not found on board`);
+      }
+    };
+
+    pushStatusLabel(rootCauseColumn, rootCause);
+    pushStatusLabel(impactColumn, impact);
 
     // 5. Apply column updates one-by-one
     const successfulUpdates = [];

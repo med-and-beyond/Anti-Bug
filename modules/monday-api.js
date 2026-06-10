@@ -701,13 +701,20 @@ export class MondayAPI {
             ? Object.entries(settings.labels).map(([id, name]) => ({ id, name }))
             : []);
 
-      // Deactivated labels are listed in settings.deactivated_labels or similar.
-      // We keep all labels by default since active status isn't always available.
-      const tags = rawLabels.map(l => ({
-        id: l.id,
-        name: l.name || '',
-        color: l.color || null
-      })).filter(t => t.name);
+      // Deactivated dropdown labels are listed by id in settings.deactivated_labels.
+      // Drop them so the picker only offers labels the user can still select in Monday.
+      const deactivated = new Set(
+        (Array.isArray(settings.deactivated_labels) ? settings.deactivated_labels : [])
+          .map(Number)
+      );
+      const tags = rawLabels
+        .filter(l => !deactivated.has(Number(l.id)))
+        .map(l => ({
+          id: l.id,
+          name: l.name || '',
+          color: l.color || null
+        }))
+        .filter(t => t.name);
 
       tags.sort((a, b) => a.name.localeCompare(b.name));
       console.log(`Returning ${tags.length} dropdown label(s) for this board`);
@@ -767,9 +774,15 @@ export class MondayAPI {
     if (!board) return { labels: [], columnId: null, columnType: null };
 
     const columns = Array.isArray(board.columns) ? board.columns : [];
-    const target = columns.find(c =>
+    // A board can have more than one column sharing a title (e.g. a legacy
+    // "Impact" dropdown alongside a newer "Impact" status column). Prefer a
+    // status/color-typed match so this loader resolves the right one regardless
+    // of column order; fall back to the first title match otherwise.
+    const titleMatches = columns.filter(c =>
       (c.title || '').trim().toLowerCase() === columnTitle.trim().toLowerCase()
     );
+    const target = titleMatches.find(c => c.type === 'status' || c.type === 'color')
+      || titleMatches[0];
 
     if (!target) {
       console.warn(`fetchActiveStatusLabels: column "${columnTitle}" not found on board ${boardId}`);
