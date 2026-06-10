@@ -884,7 +884,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     lookupCandidates.style.display = 'none';
     lookupCandidates.innerHTML = '';
-    updateFieldsSection.style.display = 'block';
+    updateFieldsSection.style.display = 'grid';
     submitBtn.disabled = false;
 
     // Collect missing-column problems and surface them in one banner at the

@@ -196,3 +196,50 @@ body {
 .canvas-container::-webkit-scrollbar-thumb:hover {
   background: #607d8b;
 }
+
+/* ============================================================
+   Dark Mode (toolbar; canvas stays dark in both themes)
+   ============================================================ */
+[data-theme="dark"] .toolbar {
+  background: #1f242b;
+  border-bottom-color: #2d333b;
+}
+
+[data-theme="dark"] .tool-group {
+  border-right-color: #2d333b;
+}
+
+[data-theme="dark"] .tool-btn {
+  background: #242a32;
+  border-color: #3a414b;
+  color: #e6e9ee;
+}
+
+[data-theme="dark"] .tool-btn:hover {
+  background: #2a323c;
+  border-color: #EB8634;
+}
+
+[data-theme="dark"] .tool-btn.active {
+  background: #0D6391;
+  border-color: #0D6391;
+  color: white;
+}
+
+[data-theme="dark"] .color-preview {
+  border-color: #3a414b;
+}
+
+[data-theme="dark"] .line-width-value {
+  color: #9aa4b2;
+}
+
+[data-theme="dark"] .cancel-btn {
+  background: #242a32;
+  color: #e6e9ee;
+  border-color: #3a414b;
+}
+
+[data-theme="dark"] .cancel-btn:hover {
+  background: #2a323c;
+}
