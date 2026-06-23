@@ -437,10 +437,10 @@ export class MondayAPI {
     return data.change_multiple_column_values;
   }
 
-  async createBugItem(boardId, groupId, bugData, attachments = []) {
+  async createBugItem(boardId, groupId, bugData, attachments = [], options = {}) {
     // Create the item with the Title field as the item name
     const bugTitle = bugData.title || bugData.description || 'New Bug';
-    
+
     const createQuery = `
       mutation ($boardId: ID!, $groupId: String!, $itemName: String!) {
         create_item(
@@ -463,9 +463,17 @@ export class MondayAPI {
 
     const item = result.create_item;
 
-    // Add bug details as an update (post)
+    // Add bug details as an update (post). When the caller pre-builds an
+    // HTML body (e.g. because the form supports @-mentions), route through
+    // addUpdateToItem so we can forward `mentions_list` — the only reliable
+    // way to fire bell notifications via Monday's API. Otherwise fall back
+    // to the legacy plain-text formatter.
     try {
-      await this.addBugDetailsUpdate(item.id, bugData);
+      if (options && typeof options.bodyHtml === 'string' && options.bodyHtml.trim()) {
+        await this.addUpdateToItem(item.id, options.bodyHtml, options.mentionsList || null);
+      } else {
+        await this.addBugDetailsUpdate(item.id, bugData);
+      }
     } catch (error) {
       console.error('Failed to add bug details:', error);
       // Continue anyway - item was created
@@ -693,13 +701,20 @@ export class MondayAPI {
             ? Object.entries(settings.labels).map(([id, name]) => ({ id, name }))
             : []);
 
-      // Deactivated labels are listed in settings.deactivated_labels or similar.
-      // We keep all labels by default since active status isn't always available.
-      const tags = rawLabels.map(l => ({
-        id: l.id,
-        name: l.name || '',
-        color: l.color || null
-      })).filter(t => t.name);
+      // Deactivated dropdown labels are listed by id in settings.deactivated_labels.
+      // Drop them so the picker only offers labels the user can still select in Monday.
+      const deactivated = new Set(
+        (Array.isArray(settings.deactivated_labels) ? settings.deactivated_labels : [])
+          .map(Number)
+      );
+      const tags = rawLabels
+        .filter(l => !deactivated.has(Number(l.id)))
+        .map(l => ({
+          id: l.id,
+          name: l.name || '',
+          color: l.color || null
+        }))
+        .filter(t => t.name);
 
       tags.sort((a, b) => a.name.localeCompare(b.name));
       console.log(`Returning ${tags.length} dropdown label(s) for this board`);
@@ -759,9 +774,15 @@ export class MondayAPI {
     if (!board) return { labels: [], columnId: null, columnType: null };
 
     const columns = Array.isArray(board.columns) ? board.columns : [];
-    const target = columns.find(c =>
+    // A board can have more than one column sharing a title (e.g. a legacy
+    // "Impact" dropdown alongside a newer "Impact" status column). Prefer a
+    // status/color-typed match so this loader resolves the right one regardless
+    // of column order; fall back to the first title match otherwise.
+    const titleMatches = columns.filter(c =>
       (c.title || '').trim().toLowerCase() === columnTitle.trim().toLowerCase()
     );
+    const target = titleMatches.find(c => c.type === 'status' || c.type === 'color')
+      || titleMatches[0];
 
     if (!target) {
       console.warn(`fetchActiveStatusLabels: column "${columnTitle}" not found on board ${boardId}`);
@@ -797,22 +818,74 @@ export class MondayAPI {
     return { labels: active, columnId: target.id, columnType: target.type };
   }
 
-  async addUpdateToItem(itemId, body) {
+  async addUpdateToItem(itemId, body, mentionsList = null) {
+    // Monday's API does NOT reliably fire bell notifications for users that
+    // are mentioned only via inline mention-chip HTML in the update body.
+    // The `mentions_list` argument (added in API version 2025-07) is what
+    // tells Monday's notification pipeline who to notify, so we forward the
+    // collected user IDs here whenever the caller provides them.
+    //
+    // Each entry must shape up to Monday's `UpdateMention` input type:
+    //   { id: ID!, type: MentionType! }   // type ∈ User | Team | Board | Project
+    const ALLOWED_MENTION_TYPES = new Set(['User', 'Team', 'Board', 'Project']);
+    const validMentions = Array.isArray(mentionsList)
+      ? mentionsList
+          .map((m) => {
+            if (!m || m.id == null) return null;
+            const id = String(m.id);
+            const type = typeof m.type === 'string' ? m.type : 'User';
+            if (!id || !ALLOWED_MENTION_TYPES.has(type)) return null;
+            return { id, type };
+          })
+          .filter(Boolean)
+      : [];
+
+    if (validMentions.length === 0) {
+      const mutation = `
+        mutation ($itemId: ID!, $body: String!) {
+          create_update(
+            item_id: $itemId,
+            body: $body
+          ) {
+            id
+          }
+        }
+      `;
+
+      const data = await this.query(mutation, {
+        itemId: itemId,
+        body: body
+      });
+
+      return data.create_update;
+    }
+
     const mutation = `
-      mutation ($itemId: ID!, $body: String!) {
+      mutation ($itemId: ID!, $body: String!, $mentionsList: [UpdateMention!]!) {
         create_update(
           item_id: $itemId,
-          body: $body
+          body: $body,
+          mentions_list: $mentionsList
         ) {
           id
         }
       }
     `;
 
-    const data = await this.query(mutation, {
-      itemId: itemId,
-      body: body
-    });
+    console.log(
+      `addUpdateToItem: posting update with ${validMentions.length} mention(s):`,
+      validMentions
+    );
+
+    const data = await this.query(
+      mutation,
+      {
+        itemId: itemId,
+        body: body,
+        mentionsList: validMentions
+      },
+      { apiVersion: '2025-07' }
+    );
 
     return data.create_update;
   }

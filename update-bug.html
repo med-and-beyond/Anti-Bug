@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Update Bug Case</title>
+  <script src="scripts/apply-theme.js"></script>
   <link rel="stylesheet" href="styles/update-bug.css">
 </head>
 <body>
@@ -87,6 +88,34 @@
               </div>
             </div>
 
+            <!-- Domain (multi-select dropdown, options populated from the board) -->
+            <div class="form-group" id="domainGroup">
+              <label for="domainInput">Domain:</label>
+              <div class="tags-container">
+                <div class="current-tags" id="domainChips"></div>
+                <div class="tag-input-row">
+                  <input type="text" id="domainInput" placeholder="Start typing to search options..." autocomplete="off" disabled>
+                  <div class="tag-suggestions" id="domainSuggestions" style="display: none;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Root Cause (single-select status, options populated from the board) -->
+            <div class="form-group" id="rootCauseGroup">
+              <label for="rootCauseSelect">Root Cause:</label>
+              <select id="rootCauseSelect" name="rootCauseSelect">
+                <option value="">-- Leave unchanged --</option>
+              </select>
+            </div>
+
+            <!-- Impact (single-select status, options populated from the board) -->
+            <div class="form-group" id="impactGroup">
+              <label for="impactSelect">Impact:</label>
+              <select id="impactSelect" name="impactSelect">
+                <option value="">-- Leave unchanged --</option>
+              </select>
+            </div>
+
             <!-- Resolution Status (options populated from the board) -->
             <div class="form-group">
               <label for="resolutionStatusSelect">Resolution status:</label>
@@ -100,23 +129,26 @@
               <textarea id="resolutionExplanation" name="resolutionExplanation" rows="3" placeholder=""></textarea>
             </div>
 
-            <!-- Status -->
+            <!-- Status (options populated from the board) -->
             <div class="form-group">
-              <label for="statusSelect">Status:</label>
+              <label for="statusSelect">Resolution owner:</label>
               <select id="statusSelect" name="statusSelect">
                 <option value="">-- Leave unchanged --</option>
-                <option value="Pending TechSupport">Pending TechSupport</option>
-                <option value="Pending dev">Pending dev (escalation)</option>
-                <option value="Pending CS">Pending CS (escalation)</option>
-                <option value="Pending code fix">Pending code fix (escalation)</option>
-                <option value="Pending Data">Pending Data (escalation)</option>
-                <option value="Waiting for Product">Waiting for Product (escalation)</option>
-                <option value="Move to Finance">Move to Finance (escalation)</option>
               </select>
             </div>
 
             <div class="form-group conditional-field" id="escalationGroup" style="display: none;">
-              <label for="escalationReason">Why escalation is needed: *</label>
+              <div id="escalationReasonGroup">
+                <label for="escalationReasonInput">Escalation Reason:</label>
+                <div class="tags-container">
+                  <div class="current-tags" id="escalationReasonChips"></div>
+                  <div class="tag-input-row">
+                    <input type="text" id="escalationReasonInput" placeholder="Start typing to search options..." autocomplete="off" disabled>
+                    <div class="tag-suggestions" id="escalationReasonSuggestions" style="display: none;"></div>
+                  </div>
+                </div>
+              </div>
+              <label for="escalationReason" style="margin-top: 12px;">Why escalation is needed: *</label>
               <textarea id="escalationReason" name="escalationReason" rows="3" placeholder="Explain why this needs to be escalated"></textarea>
             </div>
 
