@@ -1,7 +1,69 @@
 // Create Bug Script - Handles bug report creation with attachments
 
+import { createMentionController } from './mention-autocomplete.js';
+
 let attachedFiles = [];
 let screenshotCount = 0;
+
+// Cached Monday users for @-mention autocomplete (loaded once per page).
+let mondayUsers = [];
+const mentionController = createMentionController({ getUsers: () => mondayUsers });
+
+// Long-text fields that should support @-mention autocomplete. Title /
+// platform / version are short identifiers — no mentions there.
+const MENTION_FIELD_IDS = [
+  'description',
+  'stepsToReproduce',
+  'actualResult',
+  'expectedResult'
+];
+
+// Build the bug-details update body in HTML so we can splice in mention
+// chips (which only render correctly when inserted as inline anchor tags).
+// Layout intentionally mirrors the previous plain-text format — same emoji
+// section markers — so the post still scans the same in Monday.
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildBugDetailsBodyHtml(bugData, fieldsHtml) {
+  const blockHtml = (label, html) =>
+    `<p><b>${escapeHtml(label)}:</b><br/>${html}</p>`;
+  const inlineHtml = (label, value) =>
+    `<p><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</p>`;
+
+  const parts = [];
+  parts.push('<h3><b>🐛 Bug Report</b></h3>');
+  parts.push('<hr/>');
+
+  if (bugData.platform) parts.push(inlineHtml('📱 Platform', bugData.platform));
+  if (bugData.version) parts.push(inlineHtml('📦 Version', bugData.version));
+
+  if (fieldsHtml.description) {
+    parts.push(blockHtml('📝 Description', fieldsHtml.description));
+  }
+  if (fieldsHtml.stepsToReproduce) {
+    parts.push(blockHtml('🔢 Steps to reproduce', fieldsHtml.stepsToReproduce));
+  }
+  if (fieldsHtml.actualResult) {
+    parts.push(blockHtml('❌ Actual result', fieldsHtml.actualResult));
+  }
+  if (fieldsHtml.expectedResult) {
+    parts.push(blockHtml('✅ Expected result', fieldsHtml.expectedResult));
+  }
+
+  if (bugData.stepsToReproduce || bugData.actualResult || bugData.expectedResult) {
+    parts.push('<p><i>📋 Logs: (HAR attached if available)</i></p>');
+  }
+  parts.push('<p><i>📸 Media: (screenshots attached if available)</i></p>');
+
+  return parts.join('');
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   const bugForm = document.getElementById('bugForm');
@@ -58,6 +120,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Attach @-mention autocomplete to every long-text field. Users come in
+  // asynchronously via loadMondayUsers(); the popup just shows "no matches"
+  // until that resolves, then becomes fully functional without re-attaching.
+  MENTION_FIELD_IDS.forEach((id) => {
+    const field = document.getElementById(id);
+    if (field) mentionController.attach(field);
+  });
+
   // Check if we're returning from a screenshot capture
   const state = await chrome.storage.local.get(['returnToCreateBug', 'createBugState', 'annotatedScreenshot']);
   if (state.returnToCreateBug && state.createBugState) {
@@ -70,7 +140,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('stepsToReproduce').value = saved.stepsToReproduce || '';
     document.getElementById('actualResult').value = saved.actualResult || '';
     document.getElementById('expectedResult').value = saved.expectedResult || '';
-    
+
+    // Restore mention registries so chips/notifications survive the
+    // screenshot round-trip. setMentions validates each entry's offsets
+    // against the restored value, so stale mentions self-heal.
+    if (saved.mentionsByField && typeof saved.mentionsByField === 'object') {
+      MENTION_FIELD_IDS.forEach((id) => {
+        const field = document.getElementById(id);
+        const mentions = saved.mentionsByField[id];
+        if (field && Array.isArray(mentions)) {
+          mentionController.setMentions(field, mentions);
+        }
+      });
+    }
+
     // Restore attachments
     if (saved.attachedFiles) {
       attachedFiles = saved.attachedFiles;
@@ -95,8 +178,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await chrome.storage.local.remove(['returnToCreateBug']);
   }
 
-  // Load boards
-  await loadBoards();
+  // Load boards + Monday users (for @-mention picker) in parallel
+  await Promise.all([loadBoards(), loadMondayUsers()]);
 
   // Error banner handling
   const errorBanner = document.getElementById('errorBanner');
@@ -214,6 +297,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       }, 1000);
     }
   });
+
+  async function loadMondayUsers() {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'fetchUsers' }, (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          console.warn(
+            'Could not load Monday users for @-mention picker:',
+            response?.error || chrome.runtime.lastError?.message
+          );
+          mondayUsers = [];
+          resolve();
+          return;
+        }
+        mondayUsers = Array.isArray(response.users) ? response.users : [];
+        console.log(`Loaded ${mondayUsers.length} Monday user(s) for @-mention picker`);
+        resolve();
+      });
+    });
+  }
 
   async function loadBoards() {
     try {
@@ -374,7 +476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       'Link to PR',
       'Custom AI prompt',
       'QA Item Created',
-      'Status',
+      'Resolution owner',
       'Bug/Feature',
       'Bug Status',
       'Environment',
@@ -827,6 +929,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       console.log('Capturing screenshot from tab:', targetTab.id, targetTab.url);
 
+      // Snapshot tracked @-mentions per field so they survive the round-trip
+      // back to this page. Without this, the rendered text still says
+      // "@Name" but the mention registry is empty, so no chip/notification
+      // would fire on submit.
+      const mentionsByField = {};
+      MENTION_FIELD_IDS.forEach((id) => {
+        const field = document.getElementById(id);
+        if (field) mentionsByField[id] = mentionController.getMentions(field);
+      });
+
       // Store state to resume after screenshot
       await chrome.storage.local.set({
         screenshotInProgress: true,
@@ -842,7 +954,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           expectedResult: document.getElementById('expectedResult').value,
           boardId: boardSelect.value,
           groupId: groupSelect.value,
-          attachedFiles: attachedFiles
+          attachedFiles: attachedFiles,
+          mentionsByField
         }
       });
 
@@ -1081,6 +1194,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.log('Bug data:', bugData);
       console.log('Attachments:', attachedFiles.length);
 
+      // Serialize each long-text field through the @-mention controller so
+      // mentions render as Monday-native chips. The shared `seenUserIds`
+      // Set caps mention-chip emission at one per user across all fields,
+      // and is also our source of truth for `mentionsList`. Plain mention
+      // markup in the body alone does NOT fire bell notifications via the
+      // API — Monday only notifies based on `mentions_list` (added in API
+      // version 2025-07), so we forward those user IDs explicitly.
+      const fieldsHtml = {};
+      const seenMentionedUserIds = new Set();
+      MENTION_FIELD_IDS.forEach((id) => {
+        const field = document.getElementById(id);
+        fieldsHtml[id] = field
+          ? mentionController.serializeFieldToHtml(field, { seenUserIds: seenMentionedUserIds })
+          : '';
+      });
+
+      const bodyHtml = buildBugDetailsBodyHtml(bugData, fieldsHtml);
+      const mentionsList = Array.from(seenMentionedUserIds)
+        .map((mid) => {
+          const numericId = parseInt(mid);
+          return Number.isFinite(numericId) ? { id: String(numericId), type: 'User' } : null;
+        })
+        .filter(Boolean);
+
       // Collect Monday column values
       const columnValues = collectColumnValues();
       console.log('Column values:', columnValues);
@@ -1101,13 +1238,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.log('Sending message to background...');
 
       // Create bug via background script
-      // Send only metadata, not the actual file data
+      // Send only metadata, not the actual file data.
+      // Forward the form's board/group so this submission targets exactly
+      // what the user picked — the saved Default configuration is reserved
+      // for updating existing bug cases (see Settings → Bug Lists).
       chrome.runtime.sendMessage(
         {
           action: 'createBug',
           bugData: bugData,
+          boardId: boardId,
+          groupId: groupId,
           attachmentCount: attachedFiles.length,
-          columnValues: columnValues
+          columnValues: columnValues,
+          bodyHtml: bodyHtml,
+          mentionsList: mentionsList
         },
         (response) => {
           console.log('Received response from background:', response);

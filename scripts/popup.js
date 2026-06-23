@@ -97,6 +97,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.runtime.openOptionsPage();
   });
 
+  // Dark mode quick toggle
+  const themeToggleBtn = document.getElementById('themeToggleBtn');
+  if (themeToggleBtn && window.AntiBugsTheme) {
+    themeToggleBtn.addEventListener('click', () => {
+      window.AntiBugsTheme.toggle();
+    });
+  }
+
   createBugBtn.addEventListener('click', () => {
     // Open create bug page in a new tab
     chrome.tabs.create({ url: 'create-bug.html' });

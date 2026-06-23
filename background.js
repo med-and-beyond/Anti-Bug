@@ -118,23 +118,26 @@ async function handleCaptureScreenshot(message, sendResponse) {
 }
 
 async function handleCreateBug(message, sendResponse) {
-  const { bugData, attachmentCount, columnValues } = message;
-  
+  const { bugData, boardId, groupId, attachmentCount, columnValues, bodyHtml, mentionsList } = message;
+
   try {
     console.log(`Creating bug with ${attachmentCount} attachments...`);
-    
-    const settings = await chrome.storage.sync.get(['mondayToken', 'selectedBoardId', 'selectedGroupId']);
-    
+
+    const settings = await chrome.storage.sync.get(['mondayToken']);
+
     if (!settings.mondayToken) {
       sendResponse({ success: false, error: 'Monday.com not connected' });
       return;
     }
-    
-    if (!settings.selectedBoardId || !settings.selectedGroupId) {
-      sendResponse({ success: false, error: 'Please select a board and group in settings' });
+
+    // The create-bug form forwards the user's board/group selection. The
+    // saved Default configuration is reserved for updating existing bug
+    // cases — for new bug reports we always use what the user picked.
+    if (!boardId || !groupId) {
+      sendResponse({ success: false, error: 'Please select a board and group on the form' });
       return;
     }
-    
+
     // Retrieve attachments from local storage (avoids message size limit)
     let attachments = [];
     if (attachmentCount > 0) {
@@ -142,16 +145,22 @@ async function handleCreateBug(message, sendResponse) {
       attachments = storage.pendingAttachments || [];
       console.log(`Retrieved ${attachments.length} attachments from storage`);
     }
-    
+
     mondayAPI.setToken(settings.mondayToken);
-    
-    // Create the bug item with attachments first
-    console.log(`Creating bug item with ${attachments.length} attachments...`);
+
+    // Create the bug item with attachments first. When the page provides a
+    // pre-rendered HTML body (with @-mention chips inline) and a deduped
+    // mentions_list, route them through createBugItem → addUpdateToItem so
+    // Monday's notification pipeline fires bell notifications for the
+    // mentioned users. Without these, mention-chip HTML alone is not
+    // enough — Monday only notifies based on `mentions_list`.
+    console.log(`Creating bug item with ${attachments.length} attachments on board ${boardId}, group ${groupId}...`);
     const item = await mondayAPI.createBugItem(
-      settings.selectedBoardId,
-      settings.selectedGroupId,
+      boardId,
+      groupId,
       bugData,
-      attachments
+      attachments,
+      { bodyHtml: bodyHtml || null, mentionsList: mentionsList || null }
     );
     
     console.log('Bug creation complete:', item);
@@ -159,12 +168,12 @@ async function handleCreateBug(message, sendResponse) {
     
     // Fetch board columns to find default value column IDs
     console.log('Fetching board columns for updates...');
-    const columns = await mondayAPI.fetchBoardColumns(settings.selectedBoardId);
+    const columns = await mondayAPI.fetchBoardColumns(boardId);
     
     // Find columns that need forced defaults
     const defaultColumns = {};
     columns.forEach(col => {
-      if (col.title === 'Status') {
+      if (col.title === 'Resolution owner') {
         defaultColumns.status = { id: col.id, type: col.type, settings: col.settings };
       } else if (col.title === 'Bug/Feature') {
         defaultColumns.bugFeature = { id: col.id, type: col.type, settings: col.settings };
@@ -181,7 +190,7 @@ async function handleCreateBug(message, sendResponse) {
       const statusValue = mondayAPI.findLabelValue(defaultColumns.status.settings, 'Ready for Development');
       if (statusValue) {
         forcedDefaults[defaultColumns.status.id] = statusValue;
-        console.log('✓ Forcing Status to "Ready for Development"');
+        console.log('✓ Forcing Resolution owner to "Ready for Development"');
       }
     }
     
@@ -205,7 +214,7 @@ async function handleCreateBug(message, sendResponse) {
     if (Object.keys(forcedDefaults).length > 0) {
       try {
         await mondayAPI.updateColumnValues(
-          settings.selectedBoardId,
+          boardId,
           item.id,
           forcedDefaults
         );
@@ -241,7 +250,7 @@ async function handleCreateBug(message, sendResponse) {
             const labelValue = mondayAPI.findLabelValue(columnMeta.settings, columnValue.label || columnValue);
             if (labelValue) {
               await mondayAPI.updateColumnValues(
-                settings.selectedBoardId,
+                boardId,
                 item.id,
                 { [columnId]: labelValue }
               );
@@ -260,7 +269,7 @@ async function handleCreateBug(message, sendResponse) {
           // Handle other columns normally
           else {
             await mondayAPI.updateColumnValues(
-              settings.selectedBoardId,
+              boardId,
               item.id,
               { [columnId]: columnValue }
             );
@@ -383,7 +392,7 @@ async function handleFetchBoardColumns(message, sendResponse) {
 }
 
 async function handleFetchBoardTags(message, sendResponse) {
-  const { boardId } = message;
+  const { boardId, columnTitle } = message;
   try {
     const settings = await chrome.storage.sync.get(['mondayToken']);
     if (!settings.mondayToken) {
@@ -395,7 +404,9 @@ async function handleFetchBoardTags(message, sendResponse) {
       return;
     }
     mondayAPI.setToken(settings.mondayToken);
-    const result = await mondayAPI.fetchBoardTags(boardId);
+    const result = columnTitle
+      ? await mondayAPI.fetchBoardTags(boardId, columnTitle)
+      : await mondayAPI.fetchBoardTags(boardId);
     sendResponse({
       success: true,
       tags: result.tags || [],
@@ -502,11 +513,16 @@ async function handleUpdateBugCase(message, sendResponse) {
     itemId,
     boardId,
     body,
+    mentionsList,
     resolutionStatus,
     status,
     personId,
     tagIdsToAdd,
     existingTagIds,
+    domainIds,
+    escalationReasonIds,
+    rootCause,
+    impact,
     attachmentCount
   } = message;
 
@@ -525,14 +541,14 @@ async function handleUpdateBugCase(message, sendResponse) {
 
     mondayAPI.setToken(settings.mondayToken);
 
-    // 1. Post the update body. Bell notifications for any @-mentions are
-    //    fired automatically by Monday when its body parser sees the native
-    //    chip markup we emit — see `renderMentionMarkup` in
-    //    scripts/mention-autocomplete.js.
+    // 1. Post the update body. Mention-chip HTML in the body alone does NOT
+    //    reliably fire Monday's bell notifications via the API, so we also
+    //    forward the deduped `mentions_list` (collected in update-bug.js)
+    //    which is what Monday's notification pipeline actually reads.
     if (body) {
       console.log('Posting update to item...');
       try {
-        await mondayAPI.addUpdateToItem(itemId, body);
+        await mondayAPI.addUpdateToItem(itemId, body, mentionsList || null);
         console.log('Update posted successfully.');
       } catch (updateError) {
         console.error('Failed to post update:', updateError);
@@ -545,14 +561,29 @@ async function handleUpdateBugCase(message, sendResponse) {
     console.log('Fetching board columns...');
     const columns = await mondayAPI.fetchBoardColumns(boardId);
 
-    const findColumn = (title) => columns.find(col =>
-      col.title && col.title.toLowerCase() === title.toLowerCase()
-    );
+    // Some boards have more than one column sharing a title (e.g. a legacy
+    // "Impact" dropdown alongside the newer "Impact" status column). When a
+    // preferred type is supplied we match that type first, then fall back to
+    // the first title match for older boards that only have one.
+    const findColumn = (title, preferType) => {
+      const matches = columns.filter(col =>
+        col.title && col.title.toLowerCase() === title.toLowerCase()
+      );
+      if (preferType) {
+        const typed = matches.find(col => col.type === preferType);
+        if (typed) return typed;
+      }
+      return matches[0];
+    };
 
     const resolutionColumn = findColumn('Resolution status');
-    const statusColumn = findColumn('Status');
+    const statusColumn = findColumn('Resolution owner');
     const ownerColumn = findColumn('Tech support owner');
     const tagsColumn = findColumn('Tags Tech Support');
+    const domainColumn = findColumn('Domain', 'dropdown');
+    const escalationReasonColumn = findColumn('Escalation Reason', 'dropdown');
+    const rootCauseColumn = findColumn('Root Cause', 'status');
+    const impactColumn = findColumn('Impact', 'status');
 
     // 3. Build per-column updates (applied one-by-one for resilience)
     const columnUpdates = [];
@@ -591,7 +622,7 @@ async function handleUpdateBugCase(message, sendResponse) {
           value: labelValue
         });
       } else {
-        console.warn(`Status label "${status}" not found on board`);
+        console.warn(`Resolution owner label "${status}" not found on board`);
       }
     }
 
@@ -622,6 +653,46 @@ async function handleUpdateBugCase(message, sendResponse) {
         value: tagValue
       });
     }
+
+    // 4b. Dropdown selections (Domain, Escalation Reason) — multi-select, written
+    //     by label id. The user's selection already includes any existing values
+    //     it wishes to keep, so we send the full set as the new value.
+    const pushDropdownIds = (column, ids) => {
+      if (!column || !Array.isArray(ids)) return;
+      const numericIds = ids
+        .map(id => parseInt(id))
+        .filter(id => !Number.isNaN(id));
+      if (numericIds.length === 0) return;
+      columnUpdates.push({
+        columnId: column.id,
+        columnTitle: column.title,
+        value: { ids: numericIds }
+      });
+    };
+
+    pushDropdownIds(domainColumn, domainIds);
+    // Escalation Reason is only relevant when the ticket is being escalated.
+    if (status && status.trim().toLowerCase() !== 'pending techsupport') {
+      pushDropdownIds(escalationReasonColumn, escalationReasonIds);
+    }
+
+    // 4c. Status selections (Root Cause, Impact) — single-select label by name.
+    const pushStatusLabel = (column, label) => {
+      if (!column || !label) return;
+      const labelValue = mondayAPI.findLabelValue(column.settings, label);
+      if (labelValue) {
+        columnUpdates.push({
+          columnId: column.id,
+          columnTitle: column.title,
+          value: labelValue
+        });
+      } else {
+        console.warn(`"${column.title}" label "${label}" not found on board`);
+      }
+    };
+
+    pushStatusLabel(rootCauseColumn, rootCause);
+    pushStatusLabel(impactColumn, impact);
 
     // 5. Apply column updates one-by-one
     const successfulUpdates = [];

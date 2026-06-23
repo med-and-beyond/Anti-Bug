@@ -9,9 +9,21 @@ let boardTags = []; // all tags available on the current board: [{id, name, colo
 let boardTagsForBoardId = null; // boardId that boardTags was fetched for
 let boardResolutionLabels = []; // active labels for the "Resolution status" column
 let boardResolutionLabelsForBoardId = null;
+let boardStatusLabels = []; // active labels for the "Resolution owner" column
+let boardStatusLabelsForBoardId = null;
+let boardStatusColumnId = null; // null when the board has no "Resolution owner" column at all
 const selectedTagIds = new Set(); // numeric tag IDs the user selected to ADD (on top of existing)
 const selectedTagMap = new Map(); // id -> { name, color } for rendering chips
 let activeSuggestionIndex = -1;
+
+// Runtime controllers for the SELECTION_COLUMNS fields (chip pickers / selects),
+// keyed by config `key`. Populated once in DOMContentLoaded.
+const selectionControllers = {};
+// boardId the selection-column options were last loaded for (cache guard).
+let selectionOptionsForBoardId = null;
+// Per-key board column id (null when the column is missing on this board), used
+// to hide fields that don't exist on the selected board.
+const selectionColumnIds = {};
 
 // Cached Monday users for @-mention autocomplete (loaded once per page).
 let mondayUsers = [];
@@ -29,14 +41,20 @@ const MENTION_FIELD_IDS = [
   'additionalNotes'
 ];
 
-const ESCALATION_STATUSES = new Set([
-  'Pending dev',
-  'Pending CS',
-  'Pending code fix',
-  'Pending Data',
-  'Waiting for Product',
-  'Move to Finance'
-]);
+// The "Resolution owner" dropdown is populated from the board's active labels at runtime
+// (see loadStatusLabels), so renaming/adding/deactivating a label in Monday
+// flows through automatically. The escalation rule below intentionally keys
+// off the *one* baseline label (Tech Support owns the ticket) instead of an
+// allow-list of escalation names — that way a rename like
+// "Move to Finance" → "Pending Finance" still triggers the escalation reason
+// textarea without code changes. If the baseline label itself is ever
+// renamed, update this constant to match the new Monday label.
+const BASELINE_STATUS_NAME = 'Pending TechSupport';
+
+function requiresEscalationReason(statusValue) {
+  if (!statusValue) return false;
+  return statusValue.trim().toLowerCase() !== BASELINE_STATUS_NAME.toLowerCase();
+}
 
 // Resolution-status values that should show an explanation textarea, with the
 // per-status label/placeholder/error/update-section copy. Anything not listed
@@ -60,6 +78,309 @@ const RESOLUTION_EXPLANATION_META = {
 function getResolutionExplanationMeta(statusValue) {
   if (!statusValue) return null;
   return RESOLUTION_EXPLANATION_META[statusValue.trim().toLowerCase()] || null;
+}
+
+// Board "selection" columns surfaced as form fields. Each entry is driven
+// entirely by the board's live labels, so adding/renaming/deactivating an
+// option in Monday flows through without code changes. Columns are matched by
+// title (works across boards), and options are fetched fresh per board:
+//   - kind 'dropdown' -> multi-select chip picker (fetchBoardTags)
+//   - kind 'status'   -> single <select>        (fetchActiveStatusLabels)
+// `escalationGated` fields only show when an escalation owner is selected.
+const SELECTION_COLUMNS = [
+  { key: 'domain', title: 'Domain', kind: 'dropdown', escalationGated: false,
+    label: 'Domain', inputId: 'domainInput', chipsId: 'domainChips', suggestionsId: 'domainSuggestions', groupId: 'domainGroup' },
+  { key: 'rootCause', title: 'Root Cause', kind: 'status', escalationGated: false,
+    label: 'Root Cause', selectId: 'rootCauseSelect', groupId: 'rootCauseGroup' },
+  { key: 'impact', title: 'Impact', kind: 'status', escalationGated: false,
+    label: 'Impact', selectId: 'impactSelect', groupId: 'impactGroup' },
+  { key: 'escalationReason', title: 'Escalation Reason', kind: 'dropdown', escalationGated: true,
+    label: 'Escalation Reason', inputId: 'escalationReasonInput', chipsId: 'escalationReasonChips', suggestionsId: 'escalationReasonSuggestions', groupId: 'escalationReasonGroup' }
+];
+
+// Reusable multi-select chip picker for dropdown columns. Mirrors the Tags
+// picker UX, but every chip is removable and the full selected set is what we
+// submit. The picker owns its selection/option state and DOM wiring.
+function createChipMultiSelect({ inputEl, suggestionsEl, chipsEl }) {
+  const selected = new Map(); // id(number) -> { name, color }
+  let options = [];           // [{id, name, color}]
+  let activeIndex = -1;
+
+  function setOptions(opts) {
+    options = Array.isArray(opts) ? opts : [];
+  }
+
+  function getSelectedIds() {
+    return Array.from(selected.keys());
+  }
+
+  function getSelectedNames() {
+    return Array.from(selected.values()).map(v => v.name);
+  }
+
+  function setEnabled(enabled, placeholder) {
+    inputEl.disabled = !enabled;
+    if (placeholder != null) inputEl.placeholder = placeholder;
+    if (!enabled) suggestionsEl.style.display = 'none';
+  }
+
+  function clear() {
+    selected.clear();
+    activeIndex = -1;
+    inputEl.value = '';
+    suggestionsEl.style.display = 'none';
+    suggestionsEl.innerHTML = '';
+    renderChips();
+  }
+
+  // Seed the picker with the item's current values. We key off ids so nothing
+  // is dropped on save (even labels that were since deactivated); names fall
+  // back to the supplied text, then the active option list, then "#id".
+  function preselect(pairs) {
+    selected.clear();
+    (Array.isArray(pairs) ? pairs : []).forEach(({ id, name }) => {
+      const numId = parseInt(id);
+      if (Number.isNaN(numId)) return;
+      const opt = options.find(o => parseInt(o.id) === numId);
+      selected.set(numId, { name: opt?.name || name || `#${numId}`, color: opt?.color || null });
+    });
+    renderChips();
+  }
+
+  function renderChips() {
+    chipsEl.innerHTML = '';
+    selected.forEach((info, id) => {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.textContent = info.name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'remove-tag';
+      remove.textContent = '\u00d7';
+      remove.title = 'Remove';
+      remove.addEventListener('click', () => {
+        selected.delete(id);
+        renderChips();
+        if (document.activeElement === inputEl) renderSuggestions(inputEl.value.trim());
+      });
+      chip.appendChild(remove);
+      chipsEl.appendChild(chip);
+    });
+  }
+
+  function renderSuggestions(query) {
+    suggestionsEl.innerHTML = '';
+    activeIndex = -1;
+
+    if (options.length === 0) {
+      suggestionsEl.style.display = 'none';
+      return;
+    }
+
+    const q = (query || '').toLowerCase();
+    const matches = options
+      .filter(o => !q || (o.name || '').toLowerCase().includes(q))
+      .slice(0, 20);
+
+    if (matches.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tag-suggestion-empty';
+      empty.textContent = 'No matching options.';
+      suggestionsEl.appendChild(empty);
+      suggestionsEl.style.display = 'block';
+      return;
+    }
+
+    matches.forEach(opt => {
+      const id = parseInt(opt.id);
+      const alreadySelected = selected.has(id);
+
+      const div = document.createElement('div');
+      div.className = 'tag-suggestion';
+      if (alreadySelected) div.classList.add('selected');
+
+      const swatch = document.createElement('span');
+      swatch.className = 'tag-swatch';
+      if (opt.color) swatch.style.background = opt.color;
+      div.appendChild(swatch);
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'tag-name';
+      nameEl.textContent = opt.name;
+      div.appendChild(nameEl);
+
+      if (alreadySelected) {
+        const hint = document.createElement('span');
+        hint.className = 'tag-hint-text';
+        hint.textContent = 'selected';
+        div.appendChild(hint);
+      } else {
+        div.addEventListener('click', () => {
+          selected.set(id, { name: opt.name, color: opt.color || null });
+          inputEl.value = '';
+          renderChips();
+          renderSuggestions('');
+          inputEl.focus();
+        });
+      }
+
+      suggestionsEl.appendChild(div);
+    });
+
+    suggestionsEl.style.display = 'block';
+  }
+
+  function highlight(visibleEls) {
+    suggestionsEl.querySelectorAll('.tag-suggestion.active').forEach(el => el.classList.remove('active'));
+    const el = visibleEls[activeIndex];
+    if (el) {
+      el.classList.add('active');
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  inputEl.addEventListener('input', () => renderSuggestions(inputEl.value.trim()));
+  inputEl.addEventListener('focus', () => renderSuggestions(inputEl.value.trim()));
+  inputEl.addEventListener('keydown', (e) => {
+    const visible = suggestionsEl.querySelectorAll('.tag-suggestion:not(.selected)');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (visible.length === 0) return;
+      activeIndex = Math.min(activeIndex + 1, visible.length - 1);
+      highlight(visible);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (visible.length === 0) return;
+      activeIndex = Math.max(activeIndex - 1, 0);
+      highlight(visible);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIndex >= 0 && visible[activeIndex]) visible[activeIndex].click();
+      else if (visible.length === 1) visible[0].click();
+    } else if (e.key === 'Escape') {
+      suggestionsEl.style.display = 'none';
+      activeIndex = -1;
+    }
+  });
+
+  const container = inputEl.closest('.tags-container') || inputEl.parentElement;
+  document.addEventListener('click', (e) => {
+    if (container && !container.contains(e.target)) {
+      suggestionsEl.style.display = 'none';
+      activeIndex = -1;
+    }
+  });
+
+  return { setOptions, getSelectedIds, getSelectedNames, setEnabled, clear, preselect, hasOptions: () => options.length > 0 };
+}
+
+// Single-select status picker backed by a native <select>, options sourced
+// from the board's active labels.
+function createStatusSelect(selectEl) {
+  let labels = [];
+
+  function setOptions(opts) {
+    labels = Array.isArray(opts) ? opts : [];
+    render();
+  }
+
+  function render() {
+    const prev = selectEl.value;
+    selectEl.innerHTML = '';
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = '-- Leave unchanged --';
+    selectEl.appendChild(ph);
+    labels.forEach(l => {
+      const o = document.createElement('option');
+      o.value = l.name;
+      o.textContent = l.name;
+      selectEl.appendChild(o);
+    });
+    selectEl.value = (prev && labels.some(l => l.name === prev)) ? prev : '';
+  }
+
+  function getValue() { return selectEl.value; }
+  function clear() { selectEl.value = ''; }
+
+  return { setOptions, getValue, clear, hasOptions: () => labels.length > 0 };
+}
+
+// Pull the item's current dropdown selections as {id, name} pairs so a chip
+// picker can be pre-seeded. Scoped to dropdown-typed columns to avoid colliding
+// with same-titled columns of other types (e.g. the legacy "Impact" dropdown
+// vs. the newer "Impact" status column).
+function extractDropdownSelections(item, columnTitle) {
+  const col = (item.column_values || []).find(c =>
+    (c.column?.title || '').trim().toLowerCase() === columnTitle.toLowerCase()
+    && c.column?.type === 'dropdown'
+  );
+  if (!col) return [];
+  let ids = [];
+  try {
+    const parsed = JSON.parse(col.value || '{}');
+    if (Array.isArray(parsed.ids)) ids = parsed.ids;
+  } catch (e) {
+    ids = [];
+  }
+  const names = (col.text || '').split(',').map(s => s.trim()).filter(Boolean);
+  return ids.map((id, i) => ({ id, name: names[i] || `#${id}` }));
+}
+
+function fetchDropdownOptions(boardId, columnTitle) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { action: 'fetchBoardTags', boardId, columnTitle },
+      (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          console.warn(
+            `Failed to load options for "${columnTitle}":`,
+            response?.error || chrome.runtime.lastError?.message
+          );
+          resolve({ options: [], columnId: null });
+          return;
+        }
+        resolve({ options: response.tags || [], columnId: response.columnId || null });
+      }
+    );
+  });
+}
+
+function fetchStatusOptions(boardId, columnTitle) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { action: 'fetchActiveStatusLabels', boardId, columnTitle },
+      (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          console.warn(
+            `Failed to load options for "${columnTitle}":`,
+            response?.error || chrome.runtime.lastError?.message
+          );
+          resolve({ options: [], columnId: null });
+          return;
+        }
+        resolve({ options: response.labels || [], columnId: response.columnId || null });
+      }
+    );
+  });
+}
+
+// Fetch active options for every selection column on the given board and push
+// them into each controller. Cached per board so repeated selects don't refetch.
+async function loadSelectionOptions(boardId) {
+  if (!boardId) return;
+  if (selectionOptionsForBoardId === boardId) return;
+
+  await Promise.all(SELECTION_COLUMNS.map(async (cfg) => {
+    const { options, columnId } = cfg.kind === 'dropdown'
+      ? await fetchDropdownOptions(boardId, cfg.title)
+      : await fetchStatusOptions(boardId, cfg.title);
+    selectionColumnIds[cfg.key] = columnId;
+    selectionControllers[cfg.key]?.setOptions(options);
+    console.log(`Loaded ${options.length} option(s) for "${cfg.title}" (columnId=${columnId})`);
+  }));
+
+  selectionOptionsForBoardId = boardId;
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -86,6 +407,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   const ownerBadge = document.getElementById('ownerBadge');
   const bugDescriptionGroup = document.getElementById('bugDescriptionGroup');
   const bugDescriptionDisplay = document.getElementById('bugDescriptionDisplay');
+
+  // Build a controller for each configured selection column. Dropdown columns
+  // get a chip multi-select; status columns get a single <select>.
+  SELECTION_COLUMNS.forEach((cfg) => {
+    if (cfg.kind === 'dropdown') {
+      selectionControllers[cfg.key] = createChipMultiSelect({
+        inputEl: document.getElementById(cfg.inputId),
+        suggestionsEl: document.getElementById(cfg.suggestionsId),
+        chipsEl: document.getElementById(cfg.chipsId)
+      });
+    } else {
+      selectionControllers[cfg.key] = createStatusSelect(document.getElementById(cfg.selectId));
+    }
+  });
 
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
@@ -158,22 +493,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   boardSelect.addEventListener('change', () => {
     clearFoundItem();
-    // Reset tag + resolution-label caches when changing boards. The dropdown
-    // itself is hidden by clearFoundItem(), and the form is only re-shown by
-    // selectItem() (which awaits loadResolutionStatusLabels and re-renders),
-    // so we don't need to repaint the <select> here.
+    // Reset tag + status/resolution caches when changing boards. Both
+    // <select>s are repainted by selectItem() (which awaits the loaders and
+    // calls render*Options), so we don't need to repaint them here.
     boardTags = [];
     boardTagsForBoardId = null;
     boardResolutionLabels = [];
     boardResolutionLabelsForBoardId = null;
+    boardStatusLabels = [];
+    boardStatusLabelsForBoardId = null;
+    boardStatusColumnId = null;
     selectedTagIds.clear();
     selectedTagMap.clear();
+    // Reset selection-column caches + controllers so the new board's options load fresh.
+    selectionOptionsForBoardId = null;
+    SELECTION_COLUMNS.forEach((cfg) => selectionControllers[cfg.key]?.clear());
     refreshFindBtnState();
-    // Persist selection and preload board tags + resolution labels in the background
+    // Persist selection and preload tags + resolution + status labels in the background
     if (boardSelect.value) {
       chrome.storage.sync.set({ selectedBoardId: boardSelect.value });
       loadBoardTags(boardSelect.value);
       loadResolutionStatusLabels(boardSelect.value);
+      loadStatusLabels(boardSelect.value);
+      loadSelectionOptions(boardSelect.value);
     }
   });
 
@@ -205,11 +547,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  statusSelect.addEventListener('change', () => {
-    const needsReason = ESCALATION_STATUSES.has(statusSelect.value);
+  statusSelect.addEventListener('change', applyEscalationVisibility);
+
+  function applyEscalationVisibility() {
+    const needsReason = requiresEscalationReason(statusSelect.value);
     escalationGroup.style.display = needsReason ? 'block' : 'none';
     if (!needsReason) escalationReason.value = '';
-  });
+
+    // The Escalation Reason dropdown lives inside escalationGroup; keep its
+    // input enabled only while the group is visible and options exist, and
+    // clear any selection when escalation is no longer required.
+    const escReason = selectionControllers.escalationReason;
+    if (escReason) {
+      if (needsReason) {
+        const has = escReason.hasOptions();
+        escReason.setEnabled(
+          has && !!selectedItem,
+          has ? 'Start typing to search options...' : 'No options available on this board'
+        );
+      } else {
+        escReason.clear();
+        escReason.setEnabled(false);
+      }
+    }
+  }
 
   // Tag input - autocomplete against existing board tags
   tagInput.addEventListener('input', () => {
@@ -337,9 +698,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const saved = await chrome.storage.sync.get(['selectedBoardId']);
             if (saved.selectedBoardId) {
               boardSelect.value = saved.selectedBoardId;
-              // Preload board tags + resolution-status labels for the persisted board
+              // Preload tags + resolution + status labels for the persisted board
               loadBoardTags(saved.selectedBoardId);
               loadResolutionStatusLabels(saved.selectedBoardId);
+              loadStatusLabels(saved.selectedBoardId);
             }
 
             boardSelect.disabled = false;
@@ -408,6 +770,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     tagInput.disabled = true;
     tagInput.value = '';
     tagSuggestions.style.display = 'none';
+    // Clear + disable the selection-column controllers (options stay cached).
+    SELECTION_COLUMNS.forEach((cfg) => {
+      const controller = selectionControllers[cfg.key];
+      controller?.clear();
+      if (cfg.kind === 'dropdown') controller?.setEnabled(false);
+    });
     bugDescriptionGroup.style.display = 'none';
     bugDescriptionDisplay.textContent = '';
     bugDescriptionDisplay.classList.remove('is-empty');
@@ -516,15 +884,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     lookupCandidates.style.display = 'none';
     lookupCandidates.innerHTML = '';
-    updateFieldsSection.style.display = 'block';
+    updateFieldsSection.style.display = 'grid';
     submitBtn.disabled = false;
+
+    // Collect missing-column problems and surface them in one banner at the
+    // end so the user gets a single, actionable message even when more than
+    // one optional column is absent.
+    const missingColumnNotices = [];
 
     const descCol = findDescriptionColumn(item);
     if (!descCol) {
       bugDescriptionGroup.style.display = 'none';
       bugDescriptionDisplay.textContent = '';
       bugDescriptionDisplay.classList.remove('is-empty');
-      showError('This board has no "Description" column, so the bug case description cannot be displayed.');
+      missingColumnNotices.push(
+        '"Description" column is missing — the bug case description cannot be displayed.'
+      );
     } else {
       const text = (descCol.text || '').trim();
       bugDescriptionDisplay.textContent = text || '(No description provided)';
@@ -532,10 +907,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       bugDescriptionGroup.style.display = 'block';
     }
 
-    // Make sure board tags + resolution labels are available; then render chips + enable input
+    // Make sure board tags + resolution + status labels + selection-column
+    // options are available; then render chips/options + enable inputs.
     await Promise.all([
       loadBoardTags(boardSelect.value),
-      loadResolutionStatusLabels(boardSelect.value)
+      loadResolutionStatusLabels(boardSelect.value),
+      loadStatusLabels(boardSelect.value),
+      loadSelectionOptions(boardSelect.value)
     ]);
     tagInput.disabled = boardTags.length === 0;
     if (boardTags.length === 0) {
@@ -544,6 +922,50 @@ document.addEventListener('DOMContentLoaded', async () => {
       tagInput.placeholder = 'Start typing to search existing tags...';
     }
     renderTags();
+
+    // Selection columns (Domain / Root Cause / Impact / Escalation Reason):
+    // hide any column that doesn't exist on this board (warn-only), pre-seed
+    // dropdown chip pickers from the item's current values, and enable inputs.
+    SELECTION_COLUMNS.forEach((cfg) => {
+      const controller = selectionControllers[cfg.key];
+      const present = selectionColumnIds[cfg.key] != null;
+      const group = cfg.groupId ? document.getElementById(cfg.groupId) : null;
+      if (group) group.style.display = present ? 'block' : 'none';
+
+      if (!present) {
+        controller?.clear();
+        return;
+      }
+
+      if (cfg.kind === 'dropdown') {
+        controller.preselect(extractDropdownSelections(item, cfg.title));
+        if (!cfg.escalationGated) {
+          const has = controller.hasOptions();
+          controller.setEnabled(
+            has,
+            has ? 'Start typing to search options...' : 'No options available on this board'
+          );
+        }
+      }
+    });
+    // Escalation Reason enable/visibility follows the escalation condition.
+    applyEscalationVisibility();
+
+    // Resolution owner column is optional (warn-only): the form still submits
+    // and other fields (resolution, tags, owner, attachments, free-text update)
+    // can still be saved. We only block the Resolution owner select itself.
+    if (boardStatusColumnId === null) {
+      missingColumnNotices.push(
+        '"Resolution owner" column is missing — the Resolution owner field cannot be updated.'
+      );
+      statusSelect.disabled = true;
+    } else {
+      statusSelect.disabled = false;
+    }
+
+    if (missingColumnNotices.length > 0) {
+      showError(`This board is missing required columns. ${missingColumnNotices.join(' ')}`);
+    }
   }
 
   function extractTagIds(item) {
@@ -658,6 +1080,74 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     applyResolutionExplanationVisibility();
+  }
+
+  // ===== Resolution owner labels =====
+  // Mirrors the Resolution-status loader: re-fetch on each board change so
+  // adds/renames/deactivations of Resolution owner labels in Monday flow into
+  // the dropdown without code changes (the example renaming
+  // "Move to Finance" → "Pending Finance" is exactly this case).
+
+  async function loadStatusLabels(boardId) {
+    if (!boardId) return;
+    if (boardStatusLabelsForBoardId === boardId) return; // cached for this board
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { action: 'fetchActiveStatusLabels', boardId, columnTitle: 'Resolution owner' },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            console.warn(
+              'Failed to load Resolution owner labels:',
+              response?.error || chrome.runtime.lastError?.message
+            );
+            boardStatusLabels = [];
+            boardStatusColumnId = null;
+          } else {
+            boardStatusLabels = Array.isArray(response.labels) ? response.labels : [];
+            boardStatusColumnId = response.columnId || null;
+            console.log(
+              `Loaded ${boardStatusLabels.length} active "Resolution owner" label(s):`,
+              boardStatusLabels.map(l => l.name)
+            );
+          }
+          boardStatusLabelsForBoardId = boardId;
+          renderStatusOptions();
+          resolve();
+        }
+      );
+    });
+  }
+
+  function renderStatusOptions() {
+    const previousValue = statusSelect.value;
+
+    statusSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Leave unchanged --';
+    statusSelect.appendChild(placeholder);
+
+    // Append "(escalation)" hint for any label that isn't the baseline so the
+    // user knows up-front that picking it requires a justification. The hint
+    // text is purely cosmetic — the option's `value` stays exactly equal to
+    // the label name from Monday so the column update keeps matching.
+    boardStatusLabels.forEach(lbl => {
+      const opt = document.createElement('option');
+      opt.value = lbl.name;
+      opt.textContent = requiresEscalationReason(lbl.name)
+        ? `${lbl.name} (escalation)`
+        : lbl.name;
+      statusSelect.appendChild(opt);
+    });
+
+    if (previousValue && boardStatusLabels.some(l => l.name === previousValue)) {
+      statusSelect.value = previousValue;
+    } else {
+      statusSelect.value = '';
+    }
+
+    applyEscalationVisibility();
   }
 
   function existingTagIdSet() {
@@ -898,8 +1388,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (fields.status) {
-      parts.push(inline('Status', fields.status));
-      if (ESCALATION_STATUSES.has(fields.status) && fields.escalationReason) {
+      parts.push(inline('Resolution owner', fields.status));
+      if (requiresEscalationReason(fields.status) && fields.escalationReason) {
         parts.push(blockHtml('Escalation reason', fieldsHtml.escalationReason));
       }
     }
@@ -945,8 +1435,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
 
       // Shared Set caps mention-chip emission at one per user across all
-      // fields, so Monday fires exactly one bell notification per mentioned
-      // user — even if @Gil appears in 3 different textareas.
+      // fields, so the rendered update only shows one chip per user — even
+      // if @Gil appears in 3 different textareas. The same Set is also our
+      // source of truth for the `mentions_list` we send to Monday: chip
+      // markup in the body alone does NOT fire bell notifications via the
+      // API, so we forward the deduped user IDs explicitly so Monday's
+      // notification pipeline picks them up.
       const fieldsHtml = {};
       const seenMentionedUserIds = new Set();
       MENTION_FIELD_IDS.forEach((id) => {
@@ -956,6 +1450,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         );
       });
 
+      const mentionsList = Array.from(seenMentionedUserIds)
+        .map((id) => {
+          const numericId = parseInt(id);
+          return Number.isFinite(numericId) ? { id: String(numericId), type: 'User' } : null;
+        })
+        .filter(Boolean);
+
       if (!fields.problemDescription) return showError('Please provide a short description of the problem.');
       if (!fields.expectedBehavior) return showError('Please describe what is expected.');
       if (!fields.actionTaken) return showError('Please describe the action taken.');
@@ -964,9 +1465,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (resolutionMeta && !fields.resolutionExplanation) {
         return showError(resolutionMeta.error);
       }
-      if (ESCALATION_STATUSES.has(fields.status) && !fields.escalationReason) {
+      if (requiresEscalationReason(fields.status) && !fields.escalationReason) {
         return showError('Please explain why escalation is needed.');
       }
+
+      // Collect the board-selection columns (written to columns only — these
+      // are intentionally NOT included in the posted update body). Escalation
+      // Reason is only sent when the ticket is actually being escalated.
+      const escalating = requiresEscalationReason(fields.status);
+      const selections = {
+        domainIds: selectionControllers.domain.getSelectedIds(),
+        rootCause: selectionControllers.rootCause.getValue(),
+        impact: selectionControllers.impact.getValue(),
+        escalationReasonIds: escalating ? selectionControllers.escalationReason.getSelectedIds() : []
+      };
 
       submitBtn.disabled = true;
       document.getElementById('submitBtnText').textContent = 'Updating...';
@@ -989,11 +1501,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         itemUrl: selectedItem.url,
         boardId: boardSelect.value,
         body,
+        mentionsList,
         resolutionStatus: fields.resolutionStatus || null,
         status: fields.status || null,
         personId: currentUser?.id ? parseInt(currentUser.id) : null,
         tagIdsToAdd: Array.from(selectedTagIds),
         existingTagIds: selectedItem.existingTagIds || [],
+        domainIds: selections.domainIds,
+        escalationReasonIds: selections.escalationReasonIds,
+        rootCause: selections.rootCause || null,
+        impact: selections.impact || null,
         attachmentCount: attachedFiles.length
       };
 

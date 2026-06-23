@@ -63,7 +63,17 @@ body {
   color: white;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-btn,
 .settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
@@ -73,10 +83,18 @@ body {
   transition: all 0.2s;
 }
 
+.icon-btn:hover,
 .settings-btn:hover {
   background: rgba(255, 255, 255, 0.2);
   border-color: rgba(255, 255, 255, 0.3);
 }
+
+/* Theme toggle icon: show moon in light mode, sun in dark mode */
+.theme-icon-sun { display: none; }
+.theme-icon-moon { display: block; }
+
+[data-theme="dark"] .theme-icon-sun { display: block; }
+[data-theme="dark"] .theme-icon-moon { display: none; }
 
 /* Connection Status */
 .connection-status {
@@ -357,4 +375,81 @@ body {
 
 .recent-bugs::-webkit-scrollbar-thumb:hover {
   background: #a8aeb8;
+}
+
+/* ============================================================
+   Dark Mode
+   ============================================================ */
+[data-theme="dark"] body {
+  color: #e6e9ee;
+}
+
+[data-theme="dark"] .popup-container {
+  background-color: #16181c;
+}
+
+[data-theme="dark"] .connection-status,
+[data-theme="dark"] .config-switcher,
+[data-theme="dark"] .search-container,
+[data-theme="dark"] .popup-footer {
+  background: #1f242b;
+  border-color: #2d333b;
+}
+
+[data-theme="dark"] .config-switcher-select,
+[data-theme="dark"] .search-input {
+  background: #14171b;
+  border-color: #2d333b;
+  color: #e6e9ee;
+}
+
+[data-theme="dark"] .search-input::placeholder {
+  color: #8b95a3;
+}
+
+[data-theme="dark"] .recent-bugs h3,
+[data-theme="dark"] .bug-title {
+  color: #e6e9ee;
+}
+
+[data-theme="dark"] .results-count,
+[data-theme="dark"] .config-switcher-label,
+[data-theme="dark"] .bug-meta,
+[data-theme="dark"] .bug-date,
+[data-theme="dark"] .search-icon,
+[data-theme="dark"] .loading,
+[data-theme="dark"] .empty-state {
+  color: #9aa4b2;
+}
+
+[data-theme="dark"] .bug-item {
+  background: #242a32;
+  border-color: #2d333b;
+}
+
+[data-theme="dark"] .bug-item:hover {
+  border-color: #EB8634;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .update-bug-btn {
+  background: #242a32;
+  color: #5cb3e0;
+  border-color: #2f6f93;
+}
+
+[data-theme="dark"] .update-bug-btn:hover {
+  background: #2a323c;
+}
+
+[data-theme="dark"] .recent-bugs::-webkit-scrollbar-track {
+  background: #16181c;
+}
+
+[data-theme="dark"] .recent-bugs::-webkit-scrollbar-thumb {
+  background: #3a414b;
+}
+
+[data-theme="dark"] .recent-bugs::-webkit-scrollbar-thumb:hover {
+  background: #4a525e;
 }

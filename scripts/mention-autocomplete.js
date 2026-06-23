@@ -385,6 +385,56 @@ export function createMentionController({ getUsers, maxResults = 8 } = {}) {
   }
 
   /**
+   * Snapshot a field's tracked mentions so the host page can persist them
+   * to storage (e.g. across the create-bug → screenshot → annotate round
+   * trip). Returns deep-copied entries so callers can't mutate state.
+   */
+  function getMentions(field) {
+    const state = fieldStates.get(field);
+    if (!state) return [];
+    return state.mentions.map((m) => ({
+      start: m.start,
+      end: m.end,
+      userId: String(m.userId),
+      displayName: m.displayName,
+      profileUrl: m.profileUrl || ''
+    }));
+  }
+
+  /**
+   * Replace a field's tracked mentions, validating each entry's offset
+   * against the current field value. Mentions whose `[start..end]` range
+   * no longer spells out `@<displayName>` are dropped — same rule the
+   * input-reconciliation path already applies — so callers can safely
+   * round-trip a stored snapshot without leaking stale chips.
+   */
+  function setMentions(field, mentions) {
+    const state = fieldStates.get(field);
+    if (!state) return;
+    const value = field.value || '';
+    const valid = (Array.isArray(mentions) ? mentions : [])
+      .filter(
+        (m) =>
+          m &&
+          typeof m.start === 'number' &&
+          typeof m.end === 'number' &&
+          m.userId != null &&
+          typeof m.displayName === 'string' &&
+          value.slice(m.start, m.end + 1) === `@${m.displayName}`
+      )
+      .map((m) => ({
+        start: m.start,
+        end: m.end,
+        userId: String(m.userId),
+        displayName: m.displayName,
+        profileUrl: m.profileUrl || ''
+      }))
+      .sort((a, b) => a.start - b.start);
+    state.mentions = valid;
+    state.lastValue = value;
+  }
+
+  /**
    * Serialize `field.value` into HTML, replacing each tracked mention with
    * its rendered markup.
    *
@@ -479,6 +529,8 @@ export function createMentionController({ getUsers, maxResults = 8 } = {}) {
   return {
     attach,
     clear,
+    getMentions,
+    setMentions,
     serializeFieldToHtml,
     hidePopup
   };

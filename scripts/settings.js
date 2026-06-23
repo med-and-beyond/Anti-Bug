@@ -68,6 +68,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('addConfigurationBtn').addEventListener('click', addConfiguration);
   document.getElementById('saveConsentBtn').addEventListener('click', saveConsent);
   document.getElementById('clearDataBtn').addEventListener('click', clearData);
+
+  // Dark mode toggle
+  const themeToggle = document.getElementById('themeToggle');
+  if (themeToggle && window.AntiBugsTheme) {
+    themeToggle.checked = window.AntiBugsTheme.get() === 'dark';
+    themeToggle.addEventListener('change', () => {
+      window.AntiBugsTheme.set(themeToggle.checked ? 'dark' : 'light');
+    });
+    // Keep the switch in sync if the theme is changed from another page.
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.theme) {
+        themeToggle.checked = changes.theme.newValue === 'dark';
+      }
+    });
+  }
   
   // Board search functionality
   const boardSearch = document.getElementById('boardSearch');
