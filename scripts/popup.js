@@ -94,7 +94,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Event listeners
   settingsBtn.addEventListener('click', () => {
-    chrome.runtime.openOptionsPage();
+    // Use `new URL(..., location.href)` so the path works whether Anti-Bug runs
+    // standalone (file at extension root) or embedded as a subfolder of another
+    // extension. Avoids chrome.runtime.openOptionsPage() which requires the host
+    // extension to declare options_page — semantically wrong when embedded.
+    chrome.tabs.create({ url: new URL('settings.html', location.href).href });
   });
 
   // Dark mode quick toggle
