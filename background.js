@@ -101,9 +101,11 @@ async function handleCaptureScreenshot(message, sendResponse) {
       screenshotInProgress: false
     });
     
-    // Open annotation page in a new window
+    // Open annotation page in a new window. Use `new URL(..., import.meta.url)`
+    // so the path works whether Anti-Bug runs standalone (file at extension root)
+    // or embedded as a subfolder of another extension.
     chrome.windows.create({
-      url: 'annotate.html',
+      url: new URL('annotate.html', import.meta.url).href,
       type: 'popup',
       width: 1200,
       height: 800
@@ -297,7 +299,7 @@ async function handleCreateBug(message, sendResponse) {
       const bugTitle = bugData.title || bugData.description || 'New Bug';
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icons/icon48.png',
+        iconUrl: new URL('icons/icon48.png', import.meta.url).href,
         title: 'Bug Reported Successfully',
         message: `Bug "${bugTitle}" has been created on Monday.com`,
         priority: 2
@@ -739,7 +741,7 @@ async function handleUpdateBugCase(message, sendResponse) {
     try {
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icons/icon48.png',
+        iconUrl: new URL('icons/icon48.png', import.meta.url).href,
         title: 'Bug Case Updated',
         message: `Successfully updated ${successfulUpdates.length} field(s) on the ticket`,
         priority: 2

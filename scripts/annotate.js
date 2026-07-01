@@ -83,8 +83,9 @@ function setupEventListeners() {
       returnToCreateBug: true
     });
     
-    // Open create-bug page in a new tab
-    chrome.tabs.create({ url: chrome.runtime.getURL('create-bug.html') });
+    // Open create-bug page in a new tab. Use `new URL(..., location.href)` so
+    // the path works whether Anti-Bug runs standalone or embedded as a subfolder.
+    chrome.tabs.create({ url: new URL('create-bug.html', location.href).href });
     
     // Close annotation window
     setTimeout(() => {
@@ -277,8 +278,8 @@ async function saveAnnotation() {
   
   console.log('Annotation saved, reopening create-bug page...');
   
-  // Open create-bug page in a new tab
-  chrome.tabs.create({ url: chrome.runtime.getURL('create-bug.html') });
+  // Open create-bug page in a new tab (see comment on Cancel button above).
+  chrome.tabs.create({ url: new URL('create-bug.html', location.href).href });
   
   // Close annotation window after a moment
   setTimeout(() => {

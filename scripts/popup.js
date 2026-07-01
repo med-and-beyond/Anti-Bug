@@ -107,12 +107,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   createBugBtn.addEventListener('click', () => {
     // Open create bug page in a new tab
-    chrome.tabs.create({ url: 'create-bug.html' });
+    chrome.tabs.create({ url: new URL('create-bug.html', location.href).href });
   });
 
   updateBugBtn.addEventListener('click', () => {
     // Open update bug case page in a new tab
-    chrome.tabs.create({ url: 'update-bug.html' });
+    chrome.tabs.create({ url: new URL('update-bug.html', location.href).href });
   });
 
   async function loadConfigurations() {
