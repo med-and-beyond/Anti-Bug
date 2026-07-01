@@ -93,12 +93,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Event listeners
-  settingsBtn.addEventListener('click', () => {
+  settingsBtn.addEventListener('click', async () => {
     // Use `new URL(..., location.href)` so the path works whether Anti-Bug runs
     // standalone (file at extension root) or embedded as a subfolder of another
     // extension. Avoids chrome.runtime.openOptionsPage() which requires the host
     // extension to declare options_page — semantically wrong when embedded.
-    chrome.tabs.create({ url: new URL('settings.html', location.href).href });
+    const settingsUrl = new URL('settings.html', location.href).href;
+
+    // Single-instance behaviour: if the settings tab is already open, focus it
+    // instead of opening another one. This mirrors what
+    // chrome.runtime.openOptionsPage() does automatically for an extension's
+    // registered options_page — a behaviour we lost when we switched to
+    // chrome.tabs.create for portability across host extensions.
+    try {
+      const existing = await chrome.tabs.query({ url: settingsUrl });
+      if (existing.length > 0) {
+        const tab = existing[0];
+        await chrome.tabs.update(tab.id, { active: true });
+        if (tab.windowId != null) {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+        return;
+      }
+    } catch (err) {
+      // chrome.tabs.query needs the "tabs" permission; fall through and open a
+      // new tab if the lookup fails so the button never appears broken.
+      console.warn('Anti-Bug: settings tab lookup failed, opening new tab:', err);
+    }
+
+    await chrome.tabs.create({ url: settingsUrl });
   });
 
   // Dark mode quick toggle
